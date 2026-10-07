@@ -22,7 +22,7 @@ const URL_RE = /https?:\/\/\S+|www\.\.\S+|\S+\.(com|net|org|gg|tv|io|co)\b/i;
 const CAPS_MIN_LENGTH = 10;
 
 export async function checkMessage({ userId, username, message, messageId, isMod, isBroadcaster, tags }) {
-  if (isMod || isBroadcaster) return; // never automod mods or broadcaster
+  if (isMod || isBroadcaster) return;
 
   const automodEnabled = getSetting('automod_enabled') !== 'false';
   if (!automodEnabled) return;
@@ -49,9 +49,10 @@ export async function checkMessage({ userId, username, message, messageId, isMod
   // ── Caps filter ───────────────────────────────────────────────────────────
   const capsFilter = getSetting('automod_caps') !== 'false';
   if (capsFilter && message.length >= CAPS_MIN_LENGTH) {
+    const threshold = parseInt(getSetting('automod_caps_threshold') ?? '75', 10) / 100;
     const letters = message.replace(/[^a-zA-Z]/g, '');
     const caps = message.replace(/[^A-Z]/g, '');
-    if (letters.length > 0 && caps.length / letters.length > 0.75) {
+    if (letters.length > 0 && caps.length / letters.length > threshold) {
       reasons.push('excessive caps');
     }
   }
@@ -59,11 +60,13 @@ export async function checkMessage({ userId, username, message, messageId, isMod
   // ── Repetition / spam filter ──────────────────────────────────────────────
   const spamFilter = getSetting('automod_spam') !== 'false';
   if (spamFilter) {
+    const spamCount  = parseInt(getSetting('automod_spam_count')  ?? '4',  10);
+    const spamWindow = parseInt(getSetting('automod_spam_window') ?? '10', 10) * 1000;
     const now = Date.now();
     const entry = spamTracker.get(userId) || { lastMsg: '', count: 0, lastTime: 0 };
     const normalized = message.toLowerCase().trim();
 
-    if (normalized === entry.lastMsg && now - entry.lastTime < 10_000) {
+    if (normalized === entry.lastMsg && now - entry.lastTime < spamWindow) {
       entry.count++;
     } else {
       entry.count = 1;
@@ -72,7 +75,7 @@ export async function checkMessage({ userId, username, message, messageId, isMod
     entry.lastTime = now;
     spamTracker.set(userId, entry);
 
-    if (entry.count >= 4) {
+    if (entry.count >= spamCount) {
       reasons.push('spam/repetition');
       entry.count = 0;
     }

@@ -72,7 +72,7 @@ export async function linkHandler(interaction, { getSetting }) {
   });
 
   // Check if this user is already a follower — if so, assign role immediately
-  const followerRoleId = config.discord.followerRoleId || getSetting('follower_role_id');
+  const followerRoleId = getSetting('role_follower');
   const follower = followerQueries().getByTwitchId.get(twitchUser.id);
 
   let roleMsg = '';

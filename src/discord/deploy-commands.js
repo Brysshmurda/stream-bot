@@ -7,6 +7,7 @@ import { topgamesCommand } from './commands/topgames.js';
 import { linkCommand } from './commands/link.js';
 import { setupCommand } from './commands/setup.js';
 import { modCommand } from './commands/mod.js';
+import { bannedwordsCommand } from './commands/bannedwords.js';
 
 const commands = [
   statsCommand,
@@ -15,6 +16,7 @@ const commands = [
   linkCommand,
   setupCommand,
   modCommand,
+  bannedwordsCommand,
 ].map(c => c.toJSON());
 
 const rest = new REST().setToken(process.env.DISCORD_TOKEN);
