@@ -9,6 +9,7 @@ import { historyCommand, historyHandler } from './commands/history.js';
 import { topgamesCommand, topgamesHandler } from './commands/topgames.js';
 import { linkCommand, linkHandler } from './commands/link.js';
 import { setupCommand, setupHandler } from './commands/setup.js';
+import { modCommand, modHandler } from './commands/mod.js';
 
 const COMMANDS = [
   { data: statsCommand,    execute: statsHandler },
@@ -16,6 +17,7 @@ const COMMANDS = [
   { data: topgamesCommand, execute: topgamesHandler },
   { data: linkCommand,     execute: linkHandler },
   { data: setupCommand,    execute: setupHandler },
+  { data: modCommand,      execute: modHandler },
 ];
 
 export async function startDiscord() {
@@ -165,6 +167,31 @@ export async function startDiscord() {
       await channel.send(`💎 **${twitchUsername}** cheered **${bits}** bits!`);
     } catch (err) {
       console.error('[discord] cheer error:', err.message);
+    }
+  });
+
+  // ── Twitch mod actions → Discord mod log ──────────────────────────────
+
+  tracker.on('modAction', async ({ action, target, reason, moderator }) => {
+    const modLogId = getSetting('modlog_channel_id');
+    if (!modLogId) return;
+    try {
+      const { EmbedBuilder } = await import('discord.js');
+      const colors = { ban: 0xff0000, unban: 0x00ff00, timeout: 0xff6600, warn: 0xffa500, purge: 0xffcc00 };
+      const icons = { ban: '🔨', unban: '✅', timeout: '⏱', warn: '⚠️', purge: '🧹' };
+      const embed = new EmbedBuilder()
+        .setTitle(`${icons[action] ?? '🔨'} Twitch ${action.charAt(0).toUpperCase() + action.slice(1)}`)
+        .addFields(
+          { name: 'User', value: target, inline: true },
+          { name: 'Moderator', value: moderator, inline: true },
+          { name: 'Reason', value: reason || 'No reason given', inline: false },
+        )
+        .setColor(colors[action] ?? 0x9146ff)
+        .setTimestamp();
+      const channel = await client.channels.fetch(modLogId);
+      await channel.send({ embeds: [embed] });
+    } catch (err) {
+      console.error('[discord] modlog error:', err.message);
     }
   });
 

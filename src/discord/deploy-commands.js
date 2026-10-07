@@ -6,6 +6,7 @@ import { historyCommand } from './commands/history.js';
 import { topgamesCommand } from './commands/topgames.js';
 import { linkCommand } from './commands/link.js';
 import { setupCommand } from './commands/setup.js';
+import { modCommand } from './commands/mod.js';
 
 const commands = [
   statsCommand,
@@ -13,6 +14,7 @@ const commands = [
   topgamesCommand,
   linkCommand,
   setupCommand,
+  modCommand,
 ].map(c => c.toJSON());
 
 const rest = new REST().setToken(process.env.DISCORD_TOKEN);

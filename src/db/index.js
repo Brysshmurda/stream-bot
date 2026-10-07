@@ -69,6 +69,32 @@ function initSchema(db) {
       key   TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS twitch_strikes (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      twitch_user_id   TEXT NOT NULL,
+      twitch_username  TEXT NOT NULL,
+      strikes          INTEGER DEFAULT 0,
+      last_reason      TEXT,
+      last_action_at   TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS discord_warnings (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id       TEXT NOT NULL,
+      user_id        TEXT NOT NULL,
+      moderator_id   TEXT NOT NULL,
+      reason         TEXT,
+      created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS banned_words (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      word     TEXT UNIQUE NOT NULL,
+      action   TEXT NOT NULL DEFAULT 'delete',
+      duration INTEGER DEFAULT 300,
+      added_by TEXT
+    );
   `);
 }
 
@@ -198,4 +224,63 @@ export function setSetting(key, value) {
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(key, value);
+}
+
+// ── Twitch strikes ───────────────────────────────────────────────────────────
+
+export function strikeQueries(db = getDb()) {
+  return {
+    getStrikes: db.prepare(`SELECT * FROM twitch_strikes WHERE twitch_user_id = ?`),
+
+    addStrike: db.prepare(`
+      INSERT INTO twitch_strikes (twitch_user_id, twitch_username, strikes, last_reason, last_action_at)
+      VALUES (@twitch_user_id, @twitch_username, 1, @reason, CURRENT_TIMESTAMP)
+      ON CONFLICT(twitch_user_id) DO UPDATE
+        SET strikes = strikes + 1,
+            twitch_username = excluded.twitch_username,
+            last_reason = excluded.last_reason,
+            last_action_at = CURRENT_TIMESTAMP
+    `),
+
+    resetStrikes: db.prepare(`DELETE FROM twitch_strikes WHERE twitch_user_id = ?`),
+  };
+}
+
+// ── Discord warnings ─────────────────────────────────────────────────────────
+
+export function warnQueries(db = getDb()) {
+  return {
+    addWarning: db.prepare(`
+      INSERT INTO discord_warnings (guild_id, user_id, moderator_id, reason)
+      VALUES (@guild_id, @user_id, @moderator_id, @reason)
+    `),
+
+    getWarnings: db.prepare(`
+      SELECT * FROM discord_warnings WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC
+    `),
+
+    clearWarnings: db.prepare(`
+      DELETE FROM discord_warnings WHERE guild_id = ? AND user_id = ?
+    `),
+
+    countWarnings: db.prepare(`
+      SELECT COUNT(*) as count FROM discord_warnings WHERE guild_id = ? AND user_id = ?
+    `),
+  };
+}
+
+// ── Banned words ─────────────────────────────────────────────────────────────
+
+export function bannedWordQueries(db = getDb()) {
+  return {
+    addWord: db.prepare(`
+      INSERT INTO banned_words (word, action, duration, added_by)
+      VALUES (@word, @action, @duration, @added_by)
+      ON CONFLICT(word) DO UPDATE SET action = excluded.action, duration = excluded.duration
+    `),
+
+    removeWord: db.prepare(`DELETE FROM banned_words WHERE word = ?`),
+
+    getAllWords: db.prepare(`SELECT * FROM banned_words ORDER BY word`),
+  };
 }
