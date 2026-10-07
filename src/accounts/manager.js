@@ -54,7 +54,7 @@ class AccountManager extends EventEmitter {
     const modFns = createModerationFns(apiClient, account.twitch_broadcaster_id);
     const automod = createAutomod(account.id, modFns);
 
-    await startEventSub({ authProvider, broadcasterId: account.twitch_broadcaster_id, tracker, getCurrentStream });
+    await startEventSub({ apiClient, broadcasterId: account.twitch_broadcaster_id, tracker, getCurrentStream });
 
     startChatBot({ accountId: account.id, channelName: account.twitch_channel, accessToken: account.access_token, tracker, apiClient, getCurrentStream, getFollowAge, automod, modFns });
 

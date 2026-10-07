@@ -1,7 +1,7 @@
 import { EventSubWsListener } from '@twurple/eventsub-ws';
 
-export async function startEventSub({ authProvider, broadcasterId, tracker, getCurrentStream }) {
-  const listener = new EventSubWsListener({ apiClient: null, authProvider });
+export async function startEventSub({ apiClient, broadcasterId, tracker, getCurrentStream }) {
+  const listener = new EventSubWsListener({ apiClient });
   await listener.start();
 
   await listener.onStreamOnline(broadcasterId, async (event) => {
