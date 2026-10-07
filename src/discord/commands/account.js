@@ -12,14 +12,15 @@ export const accountCommand = new SlashCommandBuilder()
   )
   .addSubcommand(sub =>
     sub.setName('status')
-      .setDescription('Show the currently linked Twitch account')
+      .setDescription('Show all Twitch accounts linked to this server')
   )
   .addSubcommand(sub =>
     sub.setName('remove')
-      .setDescription('Unlink this Discord server from its Twitch account')
+      .setDescription('Unlink a Twitch account from this Discord server')
+      .addStringOption(o => o.setName('twitch').setDescription('Twitch channel to unlink (only needed if several are linked)').setRequired(false))
   );
 
-export async function accountHandler(interaction, { account, accountManager }) {
+export async function accountHandler(interaction, { account, instances = [], accountManager }) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'setup') {
@@ -47,17 +48,17 @@ export async function accountHandler(interaction, { account, accountManager }) {
   }
 
   if (sub === 'status') {
-    if (!account) {
+    if (instances.length === 0) {
       await interaction.reply({ content: 'No Twitch account is linked to this server. Use `/account setup` to link one.', ephemeral: true });
       return;
     }
+    const lines = instances.map(({ account: a, tracker }) =>
+      `${tracker.isLive ? '🔴' : '⚫'} **[${a.twitch_channel}](https://twitch.tv/${a.twitch_channel})** — ID \`${a.twitch_broadcaster_id}\`, linked ${new Date(a.created_at).toLocaleDateString()}`
+    );
     const embed = new EmbedBuilder()
-      .setTitle('🔗 Linked Twitch Account')
-      .addFields(
-        { name: 'Channel', value: `twitch.tv/${account.twitch_channel}`, inline: true },
-        { name: 'Broadcaster ID', value: account.twitch_broadcaster_id, inline: true },
-        { name: 'Linked at', value: new Date(account.created_at).toLocaleDateString(), inline: true },
-      )
+      .setTitle(`🔗 Linked Twitch Account${instances.length > 1 ? 's' : ''} (${instances.length})`)
+      .setDescription(lines.join('\n'))
+      .setFooter({ text: 'Use /account setup to link another channel' })
       .setColor(0x9146ff);
     await interaction.reply({ embeds: [embed], ephemeral: true });
     return;
@@ -65,7 +66,10 @@ export async function accountHandler(interaction, { account, accountManager }) {
 
   if (sub === 'remove') {
     if (!account) {
-      await interaction.reply({ content: 'No Twitch account is linked to this server.', ephemeral: true });
+      const msg = instances.length > 1
+        ? `Several Twitch accounts are linked here. Pick one with the \`twitch\` option: ${instances.map(i => `\`${i.account.twitch_channel}\``).join(', ')}`
+        : 'No Twitch account is linked to this server.';
+      await interaction.reply({ content: msg, ephemeral: true });
       return;
     }
     accountQueries().setGuildId.run(null, account.id);
@@ -98,7 +102,9 @@ export async function handleAccountSetupModal(interaction, accountManager) {
       refresh_token: refreshToken,
     });
 
-    await interaction.editReply(`✅ Successfully linked **${channelName}** to this server! Stream tracking and notifications are now active.\n\nUse \`/setup\` to configure notification channels and roles.`);
+    const count = accountManager.getByGuildId(interaction.guildId).length;
+    const multiNote = count > 1 ? `\n\nThis server now has **${count}** Twitch channels linked — add \`twitch:${channelName}\` to commands to target this one.` : '';
+    await interaction.editReply(`✅ Successfully linked **${channelName}** to this server! Stream tracking and notifications are now active.\n\nUse \`/setup\` to configure notification channels and roles.${multiNote}`);
   } catch (err) {
     console.error('[account setup] error:', err.message);
     await interaction.editReply(`❌ Failed to connect account: ${err.message}\n\nDouble-check your credentials and ensure your tokens have the required Twitch scopes.`);

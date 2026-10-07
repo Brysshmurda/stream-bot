@@ -1,8 +1,9 @@
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const statsCommand = new SlashCommandBuilder()
+export const statsCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('stats')
-  .setDescription('Show current stream stats, or last stream if offline');
+  .setDescription('Show current stream stats, or last stream if offline'));
 
 export async function statsHandler(interaction, { tracker, account, getCurrentStream }) {
   await interaction.deferReply();

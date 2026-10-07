@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const bannedwordsCommand = new SlashCommandBuilder()
+export const bannedwordsCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('bannedwords')
   .setDescription('Manage the Twitch chat banned word list')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
@@ -23,7 +24,7 @@ export const bannedwordsCommand = new SlashCommandBuilder()
   )
   .addSubcommand(sub =>
     sub.setName('list').setDescription('Show all banned words')
-  );
+  ));
 
 export async function bannedwordsHandler(interaction, { scopedQ }) {
   const sub = interaction.options.getSubcommand();

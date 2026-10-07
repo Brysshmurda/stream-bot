@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const modCommand = new SlashCommandBuilder()
+export const modCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('mod')
   .setDescription('Moderation commands')
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
@@ -50,7 +51,7 @@ export const modCommand = new SlashCommandBuilder()
     sub.setName('unban')
       .setDescription('Unban a user by ID')
       .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true))
-  );
+  ));
 
 export async function modHandler(interaction, { getSetting, scopedQ }) {
   const sub = interaction.options.getSubcommand();

@@ -1,4 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionFlagsBits } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
 const ON_OFF = [{ name: 'On', value: 'true' }, { name: 'Off', value: 'false' }];
 
@@ -6,7 +7,7 @@ function channelOpt(opt) {
   return opt.addChannelTypes(ChannelType.GuildText);
 }
 
-export const setupCommand = new SlashCommandBuilder()
+export const setupCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('setup')
   .setDescription('Configure the stream bot')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
@@ -155,7 +156,7 @@ export const setupCommand = new SlashCommandBuilder()
           .setDescription('Time window in seconds for spam detection (default: 10s)')
           .addIntegerOption(o => o.setName('seconds').setDescription('Seconds (5–60)').setMinValue(5).setMaxValue(60).setRequired(true))
       )
-  );
+  ));
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 

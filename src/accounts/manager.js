@@ -93,7 +93,7 @@ class AccountManager extends EventEmitter {
   }
 
   getByGuildId(guildId) {
-    return [...this._instances.values()].find(i => i.account.discord_guild_id === guildId);
+    return [...this._instances.values()].filter(i => i.account.discord_guild_id === guildId);
   }
 
   getById(accountId) {

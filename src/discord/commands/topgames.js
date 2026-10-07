@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const topgamesCommand = new SlashCommandBuilder()
+export const topgamesCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('topgames')
   .setDescription('Show the most-played games on stream')
   .addIntegerOption(opt =>
@@ -8,7 +9,7 @@ export const topgamesCommand = new SlashCommandBuilder()
       .setDescription('Number of games to show (1–15, default 10)')
       .setMinValue(1)
       .setMaxValue(15)
-  );
+  ));
 
 export async function topgamesHandler(interaction, { tracker }) {
   await interaction.deferReply();

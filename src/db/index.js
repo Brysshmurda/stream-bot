@@ -11,129 +11,161 @@ export function getDb() {
   mkdirSync(dirname(dbPath), { recursive: true });
   _db = new Database(dbPath);
   _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
   migrate(_db);
   return _db;
 }
 
 // ── Schema + migrations ───────────────────────────────────────────────────────
 
-const SCHEMA_VERSION = 2;
+const TABLES = {
+  accounts: `
+    CREATE TABLE IF NOT EXISTS accounts (
+      id                    TEXT PRIMARY KEY,
+      twitch_channel        TEXT UNIQUE NOT NULL,
+      twitch_broadcaster_id TEXT UNIQUE NOT NULL,
+      discord_guild_id      TEXT,
+      access_token          TEXT NOT NULL,
+      refresh_token         TEXT NOT NULL,
+      enabled               INTEGER DEFAULT 1,
+      created_at            TEXT DEFAULT CURRENT_TIMESTAMP
+    )`,
+  streams: `
+    CREATE TABLE IF NOT EXISTS streams (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id       TEXT NOT NULL DEFAULT 'default',
+      stream_id        TEXT NOT NULL,
+      title            TEXT,
+      started_at       TEXT NOT NULL,
+      ended_at         TEXT,
+      duration_seconds INTEGER,
+      peak_viewers     INTEGER DEFAULT 0,
+      viewer_total     INTEGER DEFAULT 0,
+      viewer_samples   INTEGER DEFAULT 0,
+      UNIQUE(account_id, stream_id)
+    )`,
+  game_segments: `
+    CREATE TABLE IF NOT EXISTS game_segments (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id       TEXT NOT NULL DEFAULT 'default',
+      stream_id        TEXT NOT NULL,
+      game_id          TEXT,
+      game_name        TEXT NOT NULL DEFAULT 'Unknown',
+      started_at       TEXT NOT NULL,
+      ended_at         TEXT,
+      duration_seconds INTEGER
+    )`,
+  viewer_snapshots: `
+    CREATE TABLE IF NOT EXISTS viewer_snapshots (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id   TEXT NOT NULL DEFAULT 'default',
+      stream_id    TEXT NOT NULL,
+      viewer_count INTEGER NOT NULL,
+      recorded_at  TEXT NOT NULL
+    )`,
+  followers: `
+    CREATE TABLE IF NOT EXISTS followers (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id       TEXT NOT NULL DEFAULT 'default',
+      twitch_user_id   TEXT NOT NULL,
+      twitch_username  TEXT NOT NULL,
+      followed_at      TEXT NOT NULL,
+      discord_user_id  TEXT,
+      notified         INTEGER DEFAULT 0,
+      UNIQUE(account_id, twitch_user_id)
+    )`,
+  discord_links: `
+    CREATE TABLE IF NOT EXISTS discord_links (
+      account_id      TEXT NOT NULL DEFAULT 'default',
+      discord_user_id TEXT NOT NULL,
+      twitch_user_id  TEXT,
+      twitch_username TEXT,
+      linked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (account_id, discord_user_id)
+    )`,
+  settings: `
+    CREATE TABLE IF NOT EXISTS settings (
+      account_id TEXT NOT NULL DEFAULT 'default',
+      key        TEXT NOT NULL,
+      value      TEXT,
+      PRIMARY KEY (account_id, key)
+    )`,
+  twitch_strikes: `
+    CREATE TABLE IF NOT EXISTS twitch_strikes (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id       TEXT NOT NULL DEFAULT 'default',
+      twitch_user_id   TEXT NOT NULL,
+      twitch_username  TEXT NOT NULL,
+      strikes          INTEGER DEFAULT 0,
+      last_reason      TEXT,
+      last_action_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(account_id, twitch_user_id)
+    )`,
+  discord_warnings: `
+    CREATE TABLE IF NOT EXISTS discord_warnings (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id     TEXT NOT NULL DEFAULT 'default',
+      guild_id       TEXT NOT NULL,
+      user_id        TEXT NOT NULL,
+      moderator_id   TEXT NOT NULL,
+      reason         TEXT,
+      created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+    )`,
+  banned_words: `
+    CREATE TABLE IF NOT EXISTS banned_words (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT NOT NULL DEFAULT 'default',
+      word       TEXT NOT NULL,
+      action     TEXT NOT NULL DEFAULT 'delete',
+      duration   INTEGER DEFAULT 300,
+      added_by   TEXT,
+      UNIQUE(account_id, word)
+    )`,
+};
 
+const columns = (db, table) => db.pragma(`table_info(${table})`).map(c => c.name);
+
+function hasUniqueOn(db, table, column) {
+  return db.pragma(`index_list(${table})`).some(idx => {
+    if (!idx.unique) return false;
+    const cols = db.pragma(`index_info(${idx.name})`);
+    return cols.length === 1 && cols[0].name === column;
+  });
+}
+
+// Recreate a table from its canonical DDL, copying over the columns both versions share.
+function rebuild(db, table, extra = {}) {
+  const oldCols = columns(db, table);
+  db.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`);
+  db.exec(TABLES[table]);
+  const newCols = columns(db, table);
+  const shared = oldCols.filter(c => newCols.includes(c) && !(c in extra));
+  const insertCols = [...Object.keys(extra), ...shared];
+  const selectExprs = [...Object.keys(extra).map(k => `@${k}`), ...shared];
+  const copy = db.prepare(`INSERT OR IGNORE INTO ${table} (${insertCols.join(',')}) SELECT ${selectExprs.join(',')} FROM ${table}_legacy`);
+  if (Object.keys(extra).length) copy.run(extra); else copy.run();
+  db.exec(`DROP TABLE ${table}_legacy`);
+  console.log(`[db] Migrated legacy table: ${table}`);
+}
+
+// Idempotent: inspects the real table structure instead of trusting user_version,
+// because pre-multi-account databases never set it.
 function migrate(db) {
-  const version = db.pragma('user_version', { simple: true });
+  // Data from the single-account era belongs to the account seeded from .env
+  const legacyAccountId = config.twitch.broadcasterId || 'default';
 
-  if (version < 1) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS accounts (
-        id                   TEXT PRIMARY KEY,
-        twitch_channel       TEXT UNIQUE NOT NULL,
-        twitch_broadcaster_id TEXT UNIQUE NOT NULL,
-        discord_guild_id     TEXT UNIQUE,
-        access_token         TEXT NOT NULL,
-        refresh_token        TEXT NOT NULL,
-        enabled              INTEGER DEFAULT 1,
-        created_at           TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+  db.pragma('foreign_keys = OFF');
+  db.transaction(() => {
+    for (const [table, ddl] of Object.entries(TABLES)) {
+      const cols = columns(db, table);
+      if (cols.length === 0) db.exec(ddl);
+      else if (table !== 'accounts' && !cols.includes('account_id')) rebuild(db, table, { account_id: legacyAccountId });
+    }
 
-      CREATE TABLE IF NOT EXISTS streams (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id       TEXT NOT NULL DEFAULT 'default',
-        stream_id        TEXT NOT NULL,
-        title            TEXT,
-        started_at       TEXT NOT NULL,
-        ended_at         TEXT,
-        duration_seconds INTEGER,
-        peak_viewers     INTEGER DEFAULT 0,
-        viewer_total     INTEGER DEFAULT 0,
-        viewer_samples   INTEGER DEFAULT 0,
-        UNIQUE(account_id, stream_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS game_segments (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id       TEXT NOT NULL DEFAULT 'default',
-        stream_id        TEXT NOT NULL,
-        game_id          TEXT,
-        game_name        TEXT NOT NULL DEFAULT 'Unknown',
-        started_at       TEXT NOT NULL,
-        ended_at         TEXT,
-        duration_seconds INTEGER
-      );
-
-      CREATE TABLE IF NOT EXISTS viewer_snapshots (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id   TEXT NOT NULL DEFAULT 'default',
-        stream_id    TEXT NOT NULL,
-        viewer_count INTEGER NOT NULL,
-        recorded_at  TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS followers (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id       TEXT NOT NULL DEFAULT 'default',
-        twitch_user_id   TEXT NOT NULL,
-        twitch_username  TEXT NOT NULL,
-        followed_at      TEXT NOT NULL,
-        discord_user_id  TEXT,
-        notified         INTEGER DEFAULT 0,
-        UNIQUE(account_id, twitch_user_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS discord_links (
-        account_id      TEXT NOT NULL DEFAULT 'default',
-        discord_user_id TEXT NOT NULL,
-        twitch_user_id  TEXT,
-        twitch_username TEXT,
-        linked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (account_id, discord_user_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS settings (
-        account_id TEXT NOT NULL DEFAULT 'default',
-        key        TEXT NOT NULL,
-        value      TEXT,
-        PRIMARY KEY (account_id, key)
-      );
-
-      CREATE TABLE IF NOT EXISTS twitch_strikes (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id       TEXT NOT NULL DEFAULT 'default',
-        twitch_user_id   TEXT NOT NULL,
-        twitch_username  TEXT NOT NULL,
-        strikes          INTEGER DEFAULT 0,
-        last_reason      TEXT,
-        last_action_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(account_id, twitch_user_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS discord_warnings (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id     TEXT NOT NULL DEFAULT 'default',
-        guild_id       TEXT NOT NULL,
-        user_id        TEXT NOT NULL,
-        moderator_id   TEXT NOT NULL,
-        reason         TEXT,
-        created_at     TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS banned_words (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        account_id TEXT NOT NULL DEFAULT 'default',
-        word       TEXT NOT NULL,
-        action     TEXT NOT NULL DEFAULT 'delete',
-        duration   INTEGER DEFAULT 300,
-        added_by   TEXT,
-        UNIQUE(account_id, word)
-      );
-    `);
-    db.pragma(`user_version = 1`);
-  }
-
-  if (version < 2) {
-    // future migrations go here
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
-  }
+    // Allow multiple Twitch accounts per Discord server
+    if (hasUniqueOn(db, 'accounts', 'discord_guild_id')) rebuild(db, 'accounts');
+  })();
+  db.pragma('foreign_keys = ON');
+  db.pragma('user_version = 3');
 }
 
 // ── Account queries ───────────────────────────────────────────────────────────

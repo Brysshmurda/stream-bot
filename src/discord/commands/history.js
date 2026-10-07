@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const historyCommand = new SlashCommandBuilder()
+export const historyCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('history')
   .setDescription('Show recent stream history')
   .addIntegerOption(opt =>
@@ -8,7 +9,7 @@ export const historyCommand = new SlashCommandBuilder()
       .setDescription('Number of streams to show (1–10, default 5)')
       .setMinValue(1)
       .setMaxValue(10)
-  );
+  ));
 
 export async function historyHandler(interaction, { tracker }) {
   await interaction.deferReply();

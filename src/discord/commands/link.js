@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
+import { withTwitchOption } from './twitchOption.js';
 
-export const linkCommand = new SlashCommandBuilder()
+export const linkCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('link')
   .setDescription('Link your Discord account to your Twitch username')
   .addSubcommand(sub =>
@@ -15,7 +16,7 @@ export const linkCommand = new SlashCommandBuilder()
   )
   .addSubcommand(sub =>
     sub.setName('status').setDescription('Check your current link status')
-  );
+  ));
 
 export async function linkHandler(interaction, { scopedQ, getSetting, apiClient }) {
   const sub = interaction.options.getSubcommand();

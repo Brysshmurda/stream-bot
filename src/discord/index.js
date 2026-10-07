@@ -199,16 +199,34 @@ export async function startDiscord(accountManager) {
     const cmd = client.commands.get(interaction.commandName);
     if (!cmd) return;
 
-    const inst = accountManager.getByGuildId(interaction.guildId);
+    const instances = accountManager.getByGuildId(interaction.guildId);
 
-    if (!inst && interaction.commandName !== 'account') {
+    if (instances.length === 0 && interaction.commandName !== 'account') {
       const reply = { content: '⚠️ No Twitch account is linked to this server. An administrator must run `/account setup` first.', ephemeral: true };
       if (interaction.replied || interaction.deferred) await interaction.followUp(reply);
       else await interaction.reply(reply);
       return;
     }
 
+    const twitchOpt = interaction.options.getString('twitch')?.toLowerCase().trim();
+    let inst = null;
+    if (twitchOpt) {
+      inst = instances.find(i => i.account.twitch_channel.toLowerCase() === twitchOpt);
+      if (!inst) {
+        const available = instances.map(i => `\`${i.account.twitch_channel}\``).join(', ') || '_none_';
+        await interaction.reply({ content: `⚠️ No linked Twitch channel named "${twitchOpt}". Linked here: ${available}`, ephemeral: true });
+        return;
+      }
+    } else if (instances.length === 1) {
+      inst = instances[0];
+    } else if (instances.length > 1 && interaction.commandName !== 'account') {
+      const list = instances.map(i => `• \`${i.account.twitch_channel}\``).join('\n');
+      await interaction.reply({ content: `ℹ️ Multiple Twitch channels are linked to this server. Add the \`twitch\` option to pick one:\n${list}`, ephemeral: true });
+      return;
+    }
+
     const context = inst ? {
+      instances,
       account:          inst.account,
       tracker:          inst.tracker,
       apiClient:        inst.apiClient,
@@ -218,7 +236,7 @@ export async function startDiscord(accountManager) {
       getSetting:       (key, fallback = null) => getSetting(inst.account.id, key, fallback),
       setSetting:       (key, value)           => setSetting(inst.account.id, key, value),
       accountManager,
-    } : { accountManager };
+    } : { instances, accountManager };
 
     try {
       await cmd.execute(interaction, context);
