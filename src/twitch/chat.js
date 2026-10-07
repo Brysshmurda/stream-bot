@@ -1,19 +1,16 @@
 import tmi from 'tmi.js';
-import { config } from '../config.js';
-import { tracker } from '../tracker/index.js';
-import { getCurrentStream, getFollowAge } from './api.js';
-import { banUser, unbanUser, timeoutUser, clearChat, updateChatSettings, getUserByName } from './moderation.js';
-import { checkMessage, permitUser } from './automod.js';
-import { strikeQueries, bannedWordQueries, getSetting } from '../db/index.js';
+import { scopedQueries } from '../db/index.js';
 
-const COOLDOWNS = new Map();
 const COOLDOWN_MS = 5000;
 
-function onCooldown(key) {
-  const last = COOLDOWNS.get(key) ?? 0;
-  if (Date.now() - last < COOLDOWN_MS) return true;
-  COOLDOWNS.set(key, Date.now());
-  return false;
+function makeOnCooldown() {
+  const map = new Map();
+  return (key) => {
+    const last = map.get(key) ?? 0;
+    if (Date.now() - last < COOLDOWN_MS) return true;
+    map.set(key, Date.now());
+    return false;
+  };
 }
 
 function isMod(tags) {
@@ -33,15 +30,17 @@ function parseSeconds(str, defaultSecs = 300) {
   return n;
 }
 
-export function startChatBot() {
-  const username = config.twitch.botUsername || config.twitch.channelName;
-  const password = config.twitch.botToken || config.twitch.accessToken;
+export function startChatBot({ accountId, channelName, accessToken, tracker, apiClient, getCurrentStream, getFollowAge, automod, modFns }) {
+  const username = channelName;
+  const password = accessToken ?? '';
 
   const client = new tmi.Client({
     identity: { username, password: `oauth:${password.replace(/^oauth:/, '')}` },
-    channels: [config.twitch.channelName],
+    channels: [channelName],
     connection: { reconnect: true, secure: true },
   });
+
+  const onCooldown = makeOnCooldown();
 
   client.on('message', async (channel, tags, message, self) => {
     if (self) return;
@@ -52,17 +51,8 @@ export function startChatBot() {
     const mod = isMod(tags);
     const broadcaster = isBroadcaster(tags);
 
-    // ── Auto-mod check (non-mod messages) ──────────────────────────────────
     if (!mod && !broadcaster) {
-      await checkMessage({
-        userId,
-        username: displayName,
-        message,
-        messageId,
-        isMod: mod,
-        isBroadcaster: broadcaster,
-        tags,
-      });
+      await automod.checkMessage({ userId, username: displayName, message, messageId, isMod: mod, isBroadcaster: broadcaster });
     }
 
     if (!message.trim().startsWith('!')) return;
@@ -70,8 +60,6 @@ export function startChatBot() {
     const [rawCmd, ...args] = message.trim().split(/\s+/);
     const cmd = rawCmd.toLowerCase();
     const say = (msg) => client.say(channel, msg);
-
-    // ── Public commands ─────────────────────────────────────────────────────
 
     switch (cmd) {
       case '!game': {
@@ -141,17 +129,15 @@ export function startChatBot() {
         break;
       }
 
-      // ── Mod-only commands ───────────────────────────────────────────────
-
       case '!ban': {
         if (!mod) break;
         const target = args[0];
         if (!target) { say(`Usage: !ban <username> [reason]`); break; }
         const reason = args.slice(1).join(' ') || 'No reason given';
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          await banUser(user.id, reason);
+          await modFns.banUser(user.id, reason);
           say(`✅ ${user.displayName} has been banned. Reason: ${reason}`);
           tracker.emit('modAction', { action: 'ban', target: user.displayName, reason, moderator: displayName });
         } catch (e) { say(`❌ Could not ban ${target}: ${e.message}`); }
@@ -163,9 +149,9 @@ export function startChatBot() {
         const target = args[0];
         if (!target) { say(`Usage: !unban <username>`); break; }
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          await unbanUser(user.id);
+          await modFns.unbanUser(user.id);
           say(`✅ ${user.displayName} has been unbanned.`);
           tracker.emit('modAction', { action: 'unban', target: user.displayName, reason: '', moderator: displayName });
         } catch (e) { say(`❌ Could not unban ${target}: ${e.message}`); }
@@ -179,9 +165,9 @@ export function startChatBot() {
         const duration = parseSeconds(args[1], 300);
         const reason = args.slice(2).join(' ') || 'No reason given';
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          await timeoutUser(user.id, duration, reason);
+          await modFns.timeoutUser(user.id, duration, reason);
           say(`✅ ${user.displayName} timed out for ${tracker.formatDuration(duration)}. Reason: ${reason}`);
           tracker.emit('modAction', { action: 'timeout', target: user.displayName, reason: `${tracker.formatDuration(duration)} - ${reason}`, moderator: displayName });
         } catch (e) { say(`❌ Could not timeout ${target}: ${e.message}`); }
@@ -193,9 +179,9 @@ export function startChatBot() {
         const target = args[0];
         if (!target) { say(`Usage: !purge <username>`); break; }
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          await timeoutUser(user.id, 1, 'purged by mod');
+          await modFns.timeoutUser(user.id, 1, 'purged by mod');
           say(`🧹 ${user.displayName} purged.`);
         } catch (e) { say(`❌ ${e.message}`); }
         break;
@@ -207,10 +193,11 @@ export function startChatBot() {
         if (!target) { say(`Usage: !warn <username> [reason]`); break; }
         const reason = args.slice(1).join(' ') || 'No reason given';
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          strikeQueries().addStrike.run({ twitch_user_id: user.id, twitch_username: user.name, reason });
-          const row = strikeQueries().getStrikes.get(user.id);
+          const sq = scopedQueries(accountId);
+          sq.strikes.add.run({ twitch_user_id: user.id, twitch_username: user.name, reason });
+          const row = sq.strikes.get.get(user.id);
           say(`⚠️ ${user.displayName} warned (${row.strikes}/3): ${reason}`);
           tracker.emit('modAction', { action: 'warn', target: user.displayName, reason, moderator: displayName });
         } catch (e) { say(`❌ ${e.message}`); }
@@ -222,9 +209,9 @@ export function startChatBot() {
         const target = args[0];
         if (!target) { say(`Usage: !permit <username>`); break; }
         try {
-          const user = await getUserByName(target);
+          const user = await modFns.getUserByName(target);
           if (!user) { say(`User ${target} not found.`); break; }
-          permitUser(user.id, 60_000);
+          automod.permitUser(user.id, 60_000);
           say(`✅ ${user.displayName} may post a link in the next 60 seconds.`);
         } catch (e) { say(`❌ ${e.message}`); }
         break;
@@ -233,64 +220,50 @@ export function startChatBot() {
       case '!slow': {
         if (!mod) break;
         const secs = parseInt(args[0], 10) || 30;
-        try {
-          await updateChatSettings({ slowModeEnabled: true, slowModeDelay: secs });
-          say(`🐢 Slow mode enabled (${secs}s)`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ slowModeEnabled: true, slowModeDelay: secs }); say(`🐢 Slow mode enabled (${secs}s)`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!slowoff': {
         if (!mod) break;
-        try {
-          await updateChatSettings({ slowModeEnabled: false });
-          say(`⚡ Slow mode disabled.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ slowModeEnabled: false }); say(`⚡ Slow mode disabled.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!subonly': {
         if (!mod) break;
-        try {
-          await updateChatSettings({ subscriberOnlyModeEnabled: true });
-          say(`⭐ Subscriber-only mode ON.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ subscriberOnlyModeEnabled: true }); say(`⭐ Subscriber-only mode ON.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!suboff': {
         if (!mod) break;
-        try {
-          await updateChatSettings({ subscriberOnlyModeEnabled: false });
-          say(`✅ Subscriber-only mode OFF.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ subscriberOnlyModeEnabled: false }); say(`✅ Subscriber-only mode OFF.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!emoteonly': {
         if (!mod) break;
-        try {
-          await updateChatSettings({ emoteModeEnabled: true });
-          say(`😊 Emote-only mode ON.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ emoteModeEnabled: true }); say(`😊 Emote-only mode ON.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!emoteoff': {
         if (!mod) break;
-        try {
-          await updateChatSettings({ emoteModeEnabled: false });
-          say(`✅ Emote-only mode OFF.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.updateChatSettings({ emoteModeEnabled: false }); say(`✅ Emote-only mode OFF.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
       case '!clear': {
         if (!mod) break;
-        try {
-          await clearChat();
-          say(`🧹 Chat cleared.`);
-        } catch (e) { say(`❌ ${e.message}`); }
+        try { await modFns.clearChat(); say(`🧹 Chat cleared.`); }
+        catch (e) { say(`❌ ${e.message}`); }
         break;
       }
 
@@ -300,7 +273,7 @@ export function startChatBot() {
         const action = ['timeout', 'ban', 'delete'].includes(args[1]) ? args[1] : 'delete';
         const duration = parseInt(args[2], 10) || 300;
         if (!word) { say(`Usage: !addword <word> [delete|timeout|ban] [timeout_seconds]`); break; }
-        bannedWordQueries().addWord.run({ word, action, duration, added_by: displayName });
+        scopedQueries(accountId).bannedWords.add.run({ word, action, duration, added_by: displayName });
         say(`✅ Added "${word}" to banned words (action: ${action})`);
         break;
       }
@@ -309,7 +282,7 @@ export function startChatBot() {
         if (!broadcaster) break;
         const word = args[0]?.toLowerCase();
         if (!word) { say(`Usage: !removeword <word>`); break; }
-        bannedWordQueries().removeWord.run(word);
+        scopedQueries(accountId).bannedWords.remove.run(word);
         say(`✅ Removed "${word}" from banned words.`);
         break;
       }
@@ -317,9 +290,9 @@ export function startChatBot() {
   });
 
   client.connect().then(() => {
-    console.log(`[chat] Connected to #${config.twitch.channelName}`);
+    console.log(`[chat:${accountId}] Connected to #${channelName}`);
   }).catch(err => {
-    console.error('[chat] Connection error:', err.message);
+    console.error(`[chat:${accountId}] Connection error:`, err.message);
   });
 
   return client;

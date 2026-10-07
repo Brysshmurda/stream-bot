@@ -159,7 +159,7 @@ export const setupCommand = new SlashCommandBuilder()
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-export async function setupHandler(interaction, { getSetting, setSetting }) {
+export async function setupHandler(interaction, { getSetting, setSetting, scopedQ }) {
   const sub = interaction.options.getSubcommand();
   const group = interaction.options.getSubcommandGroup(false);
 

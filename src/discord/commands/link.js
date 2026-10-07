@@ -1,7 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
-import { getTwitchApi } from '../../twitch/api.js';
-import { linkQueries, followerQueries } from '../../db/index.js';
-import { config } from '../../config.js';
+import { SlashCommandBuilder } from 'discord.js';
 
 export const linkCommand = new SlashCommandBuilder()
   .setName('link')
@@ -10,51 +7,41 @@ export const linkCommand = new SlashCommandBuilder()
     sub.setName('twitch')
       .setDescription('Link your Twitch account')
       .addStringOption(opt =>
-        opt.setName('username')
-          .setDescription('Your Twitch username')
-          .setRequired(true)
+        opt.setName('username').setDescription('Your Twitch username').setRequired(true)
       )
   )
   .addSubcommand(sub =>
-    sub.setName('remove')
-      .setDescription('Remove your linked Twitch account')
+    sub.setName('remove').setDescription('Remove your linked Twitch account')
   )
   .addSubcommand(sub =>
-    sub.setName('status')
-      .setDescription('Check your current link status')
+    sub.setName('status').setDescription('Check your current link status')
   );
 
-export async function linkHandler(interaction, { getSetting }) {
+export async function linkHandler(interaction, { scopedQ, getSetting, apiClient }) {
   const sub = interaction.options.getSubcommand();
-  const lq = linkQueries();
 
   if (sub === 'remove') {
-    lq.removeByDiscordId.run(interaction.user.id);
+    scopedQ.links.remove.run(interaction.user.id);
     await interaction.reply({ content: '✅ Your Twitch account has been unlinked.', ephemeral: true });
     return;
   }
 
   if (sub === 'status') {
-    const existing = lq.getByDiscordId.get(interaction.user.id);
+    const existing = scopedQ.links.getByDiscordId.get(interaction.user.id);
     if (!existing) {
       await interaction.reply({ content: 'You have no Twitch account linked. Use `/link twitch` to link one.', ephemeral: true });
     } else {
-      await interaction.reply({
-        content: `✅ Linked to Twitch account: **${existing.twitch_username}**`,
-        ephemeral: true,
-      });
+      await interaction.reply({ content: `✅ Linked to Twitch account: **${existing.twitch_username}**`, ephemeral: true });
     }
     return;
   }
 
-  // sub === 'twitch'
   await interaction.deferReply({ ephemeral: true });
   const twitchUsername = interaction.options.getString('username').toLowerCase().trim();
 
   let twitchUser;
   try {
-    const api = await getTwitchApi();
-    twitchUser = await api.users.getUserByName(twitchUsername);
+    twitchUser = await apiClient.users.getUserByName(twitchUsername);
   } catch (err) {
     await interaction.editReply(`Could not look up Twitch user "${twitchUsername}". Please check the username.`);
     return;
@@ -65,15 +52,14 @@ export async function linkHandler(interaction, { getSetting }) {
     return;
   }
 
-  lq.upsertLink.run({
+  scopedQ.links.upsert.run({
     discord_user_id: interaction.user.id,
     twitch_user_id: twitchUser.id,
     twitch_username: twitchUser.name,
   });
 
-  // Check if this user is already a follower — if so, assign role immediately
   const followerRoleId = getSetting('role_follower');
-  const follower = followerQueries().getByTwitchId.get(twitchUser.id);
+  const follower = scopedQ.followers.getByTwitchId.get(twitchUser.id);
 
   let roleMsg = '';
   if (follower && followerRoleId) {
@@ -85,9 +71,6 @@ export async function linkHandler(interaction, { getSetting }) {
       }
     } catch {}
   }
-
-  const subRoleId = config.discord.subscriberRoleId || getSetting('subscriber_role_id');
-  // (subscriber check would require an API call; skipping for now — handled on sub event)
 
   await interaction.editReply(`✅ Linked Discord account to Twitch **${twitchUser.displayName}**.${roleMsg}`);
 }
