@@ -17,7 +17,7 @@ export const accountCommand = new SlashCommandBuilder()
   .addSubcommand(sub =>
     sub.setName('remove')
       .setDescription('Unlink a Twitch account from this Discord server')
-      .addStringOption(o => o.setName('twitch').setDescription('Twitch channel to unlink (only needed if several are linked)').setRequired(false))
+      .addStringOption(o => o.setName('twitch').setDescription('Twitch channel to unlink (only needed if several are linked)').setRequired(false).setAutocomplete(true))
   );
 
 export async function accountHandler(interaction, { account, instances = [], accountManager }) {

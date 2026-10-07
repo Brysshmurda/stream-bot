@@ -1,7 +1,7 @@
 import { SlashCommandSubcommandBuilder, SlashCommandSubcommandGroupBuilder } from 'discord.js';
 
 const addOpt = (b) => b.addStringOption(o =>
-  o.setName('twitch').setDescription('Twitch channel (only needed if several are linked to this server)').setRequired(false)
+  o.setName('twitch').setDescription('Twitch channel (only needed if several are linked to this server)').setRequired(false).setAutocomplete(true)
 );
 
 // Slash commands can't mix top-level options with subcommands, so the option goes on every leaf subcommand.

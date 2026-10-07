@@ -194,6 +194,19 @@ export async function startDiscord(accountManager) {
       return;
     }
 
+    if (interaction.isAutocomplete()) {
+      const focused = interaction.options.getFocused(true);
+      if (focused.name !== 'twitch') return interaction.respond([]).catch(() => {});
+      const typed = focused.value.toLowerCase();
+      const choices = accountManager.getByGuildId(interaction.guildId)
+        .map(i => i.account.twitch_channel)
+        .filter(name => name.toLowerCase().startsWith(typed))
+        .slice(0, 25)
+        .map(name => ({ name, value: name }));
+      await interaction.respond(choices).catch(() => {});
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const cmd = client.commands.get(interaction.commandName);
