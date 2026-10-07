@@ -1,0 +1,21 @@
+{
+  "name": "stream-bot",
+  "version": "1.0.0",
+  "description": "Twitch + Discord stream tracking and community bot",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy-commands": "node src/discord/deploy-commands.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@twurple/api": "^7.2.0",
+    "@twurple/auth": "^7.2.0",
+    "@twurple/eventsub-ws": "^7.2.0",
+    "better-sqlite3": "^9.6.0",
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "tmi.js": "^1.8.5"
+  }
+}
