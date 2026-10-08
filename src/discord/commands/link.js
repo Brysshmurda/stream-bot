@@ -1,7 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { withTwitchOption } from './twitchOption.js';
+import { getLinkByDiscordId, removeLinks, saveLink } from '../../db/index.js';
 
-export const linkCommand = withTwitchOption(new SlashCommandBuilder()
+export const linkCommand = new SlashCommandBuilder()
   .setName('link')
   .setDescription('Link your Discord account to your Twitch username')
   .addSubcommand(sub =>
@@ -15,63 +15,80 @@ export const linkCommand = withTwitchOption(new SlashCommandBuilder()
     sub.setName('remove').setDescription('Remove your linked Twitch account')
   )
   .addSubcommand(sub =>
-    sub.setName('status').setDescription('Check your current link status')
-  ));
+    sub.setName('status').setDescription('Check your link and re-check your follower role')
+  );
 
-export async function linkHandler(interaction, { scopedQ, getSetting, apiClient }) {
+// Twitch only reports new follows, so ask it directly whether this person already follows any linked channel.
+async function syncFollowerRole(interaction, instances, twitchUserId, getSetting) {
+  const results = await Promise.all(instances.map(async (i) => ({
+    channel: i.account.twitch_channel,
+    follows: Boolean(await i.getFollowAge(twitchUserId).catch(() => null)),
+  })));
+  const followed = results.filter(r => r.follows).map(r => r.channel);
+  const roleId = getSetting('role_follower');
+
+  if (!roleId) return { followed, note: '' };
+  if (!followed.length) return { followed, note: `\nYou don't follow ${instances.map(i => `**${i.account.twitch_channel}**`).join(' or ')} yet — follow on Twitch and you'll get the Follower role automatically.` };
+
+  try {
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    if (member.roles.cache.has(roleId)) return { followed, note: '' };
+    await member.roles.add(roleId);
+    return { followed, note: '\n🎉 You\'ve been given the **Follower** role!' };
+  } catch (err) {
+    console.error('[link] follower role error:', err.message);
+    return { followed, note: '\n⚠️ You follow, but I couldn\'t give you the Follower role. An admin needs to check my **Manage Roles** permission and that my role is above the Follower role.' };
+  }
+}
+
+export async function linkHandler(interaction, { instances = [], getSetting }) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'remove') {
-    scopedQ.links.remove.run(interaction.user.id);
-    await interaction.reply({ content: '✅ Your Twitch account has been unlinked.', ephemeral: true });
+    const removed = removeLinks(interaction.user.id);
+    await interaction.reply({ content: removed ? '✅ Your Twitch account has been unlinked.' : 'You had no Twitch account linked.', ephemeral: true });
+    return;
+  }
+
+  if (instances.length === 0) {
+    await interaction.reply({ content: 'No Twitch channel is connected to this server yet, so there\'s nothing to link to.', ephemeral: true });
     return;
   }
 
   if (sub === 'status') {
-    const existing = scopedQ.links.getByDiscordId.get(interaction.user.id);
+    const existing = getLinkByDiscordId(interaction.user.id);
     if (!existing) {
       await interaction.reply({ content: 'You have no Twitch account linked. Use `/link twitch` to link one.', ephemeral: true });
-    } else {
-      await interaction.reply({ content: `✅ Linked to Twitch account: **${existing.twitch_username}**`, ephemeral: true });
+      return;
     }
+    await interaction.deferReply({ ephemeral: true });
+    const { followed, note } = await syncFollowerRole(interaction, instances, existing.twitch_user_id, getSetting);
+    const follows = followed.length ? `\nFollowing: ${followed.map(c => `**${c}**`).join(', ')}` : '';
+    await interaction.editReply(`✅ Linked to Twitch account: **${existing.twitch_username}**${follows}${note}`);
     return;
   }
 
   await interaction.deferReply({ ephemeral: true });
-  const twitchUsername = interaction.options.getString('username').toLowerCase().trim();
+  const twitchUsername = interaction.options.getString('username').toLowerCase().trim().replace(/^@/, '');
 
   let twitchUser;
   try {
-    twitchUser = await apiClient.users.getUserByName(twitchUsername);
-  } catch (err) {
+    twitchUser = await instances[0].apiClient.users.getUserByName(twitchUsername);
+  } catch {
     await interaction.editReply(`Could not look up Twitch user "${twitchUsername}". Please check the username.`);
     return;
   }
-
   if (!twitchUser) {
     await interaction.editReply(`Twitch user **${twitchUsername}** was not found.`);
     return;
   }
 
-  scopedQ.links.upsert.run({
+  saveLink(interaction.guildId, {
     discord_user_id: interaction.user.id,
     twitch_user_id: twitchUser.id,
     twitch_username: twitchUser.name,
   });
 
-  const followerRoleId = getSetting('role_follower');
-  const follower = scopedQ.followers.getByTwitchId.get(twitchUser.id);
-
-  let roleMsg = '';
-  if (follower && followerRoleId) {
-    try {
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      if (!member.roles.cache.has(followerRoleId)) {
-        await member.roles.add(followerRoleId);
-        roleMsg = '\n🎉 You\'ve been given the **Follower** role!';
-      }
-    } catch {}
-  }
-
-  await interaction.editReply(`✅ Linked Discord account to Twitch **${twitchUser.displayName}**.${roleMsg}`);
+  const { note } = await syncFollowerRole(interaction, instances, twitchUser.id, getSetting);
+  await interaction.editReply(`✅ Linked Discord account to Twitch **${twitchUser.displayName}**.${note}`);
 }

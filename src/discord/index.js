@@ -43,7 +43,6 @@ async function fetchChannel(client, account, key) {
 
 function setupTrackerListeners(client, inst) {
   const { tracker, account } = inst;
-  const aid = account.id;
 
   tracker.on('streamStart', async (stream) => {
     if (!notifEnabled(account, 'notify_stream_live')) return;
@@ -88,8 +87,8 @@ function setupTrackerListeners(client, inst) {
 
   tracker.on('follow', async ({ twitchUserId, twitchUsername }) => {
     const followerRoleId = getAccountSetting(account, 'role_follower');
-    const link = scopedQueries(aid).links.getByTwitchId.get(twitchUserId);
-    if (link && followerRoleId) await assignRoleToMember(client, link.discord_user_id, followerRoleId);
+    const discordUserId = findDiscordUserByTwitchId(twitchUserId);
+    if (discordUserId && followerRoleId) await assignRoleToMember(client, account.discord_guild_id, discordUserId, followerRoleId);
 
     if (!notifEnabled(account, 'notify_follows')) return;
     const channel = await fetchChannel(client, account, 'channel_follows');
@@ -100,8 +99,8 @@ function setupTrackerListeners(client, inst) {
 
   tracker.on('subscribe', async ({ twitchUserId, twitchUsername, tier, isGift }) => {
     const subRoleId = getAccountSetting(account, 'role_subscriber');
-    const link = scopedQueries(aid).links.getByTwitchId.get(twitchUserId);
-    if (link && subRoleId) await assignRoleToMember(client, link.discord_user_id, subRoleId);
+    const discordUserId = findDiscordUserByTwitchId(twitchUserId);
+    if (discordUserId && subRoleId) await assignRoleToMember(client, account.discord_guild_id, discordUserId, subRoleId);
 
     if (isGift) return;
     if (!notifEnabled(account, 'notify_subs')) return;
@@ -214,7 +213,8 @@ export async function startDiscord(accountManager) {
     const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand(false);
     // Server-wide settings don't need a Twitch channel picked (or linked at all)
-    const serverLevel = interaction.commandName === 'setup' && (['channels', 'roles', 'notifications'].includes(group) || sub === 'view');
+    const serverLevel = interaction.commandName === 'link'
+      || (interaction.commandName === 'setup' && (['channels', 'roles', 'notifications'].includes(group) || sub === 'view'));
     const accountOptional = serverLevel || interaction.commandName === 'account';
 
     if (instances.length === 0 && !accountOptional) {
@@ -290,17 +290,14 @@ async function registerCommands(client) {
   }
 }
 
-async function assignRoleToMember(client, discordUserId, roleId) {
+async function assignRoleToMember(client, guildId, discordUserId, roleId) {
+  if (!guildId) return;
   try {
-    const guilds = client.guilds.cache;
-    for (const guild of guilds.values()) {
-      try {
-        const member = await guild.members.fetch(discordUserId).catch(() => null);
-        if (member && !member.roles.cache.has(roleId)) await member.roles.add(roleId);
-      } catch {}
-    }
+    const guild = await client.guilds.fetch(guildId);
+    const member = await guild.members.fetch(discordUserId);
+    if (!member.roles.cache.has(roleId)) await member.roles.add(roleId);
   } catch (err) {
-    console.error('[discord] role assign error:', err.message);
+    console.error(`[discord] role assign error (user ${discordUserId}, role ${roleId}):`, err.message);
   }
 }
 

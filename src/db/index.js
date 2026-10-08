@@ -313,10 +313,26 @@ export function scopedQueries(accountId, db = getDb()) {
 
 // ── Helper wrappers ───────────────────────────────────────────────────────────
 
-// Searches links across every account, so a streamer who ran /link twitch in any scope is found.
+// A Discord↔Twitch link belongs to the person, not to one streamer, so lookups ignore account_id
+// (older links were saved under whichever account the command ran against).
 export function findDiscordUserByTwitchId(twitchUserId) {
-  const row = getDb().prepare(`SELECT discord_user_id FROM discord_links WHERE twitch_user_id = ? LIMIT 1`).get(twitchUserId);
+  const row = getDb().prepare(`SELECT discord_user_id FROM discord_links WHERE twitch_user_id = ? ORDER BY linked_at DESC LIMIT 1`).get(twitchUserId);
   return row?.discord_user_id ?? null;
+}
+
+export function getLinkByDiscordId(discordUserId) {
+  return getDb().prepare(`SELECT * FROM discord_links WHERE discord_user_id = ? ORDER BY linked_at DESC LIMIT 1`).get(discordUserId) ?? null;
+}
+
+export function removeLinks(discordUserId) {
+  return getDb().prepare(`DELETE FROM discord_links WHERE discord_user_id = ?`).run(discordUserId).changes;
+}
+
+export function saveLink(guildId, link) {
+  getDb().transaction(() => {
+    removeLinks(link.discord_user_id);
+    scopedQueries(guildScope(guildId)).links.upsert.run(link);
+  })();
 }
 
 export function getSetting(accountId, key, fallback = null) {
