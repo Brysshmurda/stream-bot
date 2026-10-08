@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import { accountQueries } from '../../db/index.js';
+import { accountQueries, setSetting } from '../../db/index.js';
 import { startDeviceAuth, waitForDeviceToken, validateToken } from '../../twitch/deviceAuth.js';
 
 export const accountCommand = new SlashCommandBuilder()
@@ -18,6 +18,12 @@ export const accountCommand = new SlashCommandBuilder()
   .addSubcommand(sub =>
     sub.setName('status')
       .setDescription('Show all Twitch accounts linked to this server')
+  )
+  .addSubcommand(sub =>
+    sub.setName('streamer')
+      .setDescription('Say which Discord member owns a Twitch channel (only needed if the live role misses them)')
+      .addUserOption(o => o.setName('member').setDescription('The streamer\'s Discord account').setRequired(true))
+      .addStringOption(o => o.setName('twitch').setDescription('Twitch channel (only needed if several are linked)').setRequired(false).setAutocomplete(true))
   )
   .addSubcommand(sub =>
     sub.setName('remove')
@@ -71,6 +77,20 @@ export async function accountHandler(interaction, { account, instances = [], acc
       .setFooter({ text: 'Use /account setup to link another channel' })
       .setColor(0x9146ff);
     await interaction.reply({ embeds: [embed], ephemeral: true });
+    return;
+  }
+
+  if (sub === 'streamer') {
+    if (!account) {
+      const msg = instances.length > 1
+        ? `Pick which channel with the \`twitch\` option: ${instances.map(i => `\`${i.account.twitch_channel}\``).join(', ')}`
+        : 'No Twitch account is linked to this server yet. Use `/account setup` first.';
+      await interaction.reply({ content: msg, ephemeral: true });
+      return;
+    }
+    const member = interaction.options.getUser('member');
+    setSetting(account.id, 'streamer_discord_id', member.id);
+    await interaction.reply({ content: `✅ ${member} is the streamer for **${account.twitch_channel}** — they'll get the live role when that channel goes live.`, ephemeral: true });
     return;
   }
 

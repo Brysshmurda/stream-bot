@@ -163,6 +163,18 @@ function migrate(db) {
 
     // Allow multiple Twitch accounts per Discord server
     if (hasUniqueOn(db, 'accounts', 'discord_guild_id')) rebuild(db, 'accounts');
+
+    // Discord-side settings moved from per-account to per-server; the oldest account's values win
+    const guildKeyFilter = `(s.key LIKE 'channel\\_%' ESCAPE '\\' OR s.key LIKE 'role\\_%' ESCAPE '\\' OR s.key LIKE 'notify\\_%' ESCAPE '\\')`;
+    db.exec(`
+      INSERT OR IGNORE INTO settings (account_id, key, value)
+      SELECT 'guild_' || a.discord_guild_id, s.key, s.value
+      FROM settings s JOIN accounts a ON a.id = s.account_id
+      WHERE a.discord_guild_id IS NOT NULL AND ${guildKeyFilter}
+      ORDER BY a.created_at;
+      DELETE FROM settings AS s
+      WHERE s.account_id IN (SELECT id FROM accounts WHERE discord_guild_id IS NOT NULL) AND ${guildKeyFilter};
+    `);
   })();
   db.pragma('foreign_keys = ON');
   db.pragma('user_version = 3');
@@ -310,6 +322,21 @@ export function findDiscordUserByTwitchId(twitchUserId) {
 export function getSetting(accountId, key, fallback = null) {
   const row = scopedQueries(accountId).settings.get.get(key);
   return row ? row.value : fallback;
+}
+
+// Channels, roles and notification toggles belong to the Discord server and are shared by
+// every Twitch account linked to it; everything else (automod etc.) stays per account.
+const GUILD_KEY = /^(channel_|role_|notify_)/;
+export const guildScope = (guildId) => `guild_${guildId}`;
+const scopeFor = (account, key) =>
+  GUILD_KEY.test(key) && account.discord_guild_id ? guildScope(account.discord_guild_id) : account.id;
+
+export function getAccountSetting(account, key, fallback = null) {
+  return getSetting(scopeFor(account, key), key, fallback);
+}
+
+export function setAccountSetting(account, key, value) {
+  setSetting(scopeFor(account, key), key, value);
 }
 
 export function setSetting(accountId, key, value) {

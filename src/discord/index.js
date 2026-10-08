@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Collection, Events, REST, Routes } from 'discord.js';
 import { config } from '../config.js';
-import { getSetting, setSetting, scopedQueries, findDiscordUserByTwitchId } from '../db/index.js';
+import { getSetting, setSetting, getAccountSetting, setAccountSetting, guildScope, scopedQueries, findDiscordUserByTwitchId } from '../db/index.js';
 
 import { statsCommand, statsHandler } from './commands/stats.js';
 import { historyCommand, historyHandler } from './commands/history.js';
@@ -24,17 +24,17 @@ const COMMANDS = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getChannelId(accountId, specificKey) {
-  return getSetting(accountId, specificKey) || getSetting(accountId, 'channel_announce');
+function getChannelId(account, specificKey) {
+  return getAccountSetting(account, specificKey) || getAccountSetting(account, 'channel_announce');
 }
 
-function notifEnabled(accountId, key, defaultOn = true) {
-  const val = getSetting(accountId, key);
+function notifEnabled(account, key, defaultOn = true) {
+  const val = getAccountSetting(account, key);
   return val === null ? defaultOn : val !== 'false';
 }
 
-async function fetchChannel(client, accountId, key) {
-  const id = getChannelId(accountId, key);
+async function fetchChannel(client, account, key) {
+  const id = getChannelId(account, key);
   if (!id) return null;
   try { return await client.channels.fetch(id); } catch { return null; }
 }
@@ -46,8 +46,8 @@ function setupTrackerListeners(client, inst) {
   const aid = account.id;
 
   tracker.on('streamStart', async (stream) => {
-    if (!notifEnabled(aid, 'notify_stream_live')) return;
-    const channel = await fetchChannel(client, aid, 'channel_announce');
+    if (!notifEnabled(account, 'notify_stream_live')) return;
+    const channel = await fetchChannel(client, account, 'channel_announce');
     if (!channel) return;
     try {
       const { EmbedBuilder } = await import('discord.js');
@@ -68,8 +68,8 @@ function setupTrackerListeners(client, inst) {
   tracker.on('offlineAtStartup', () => setLiveRole(client, account, false));
 
   tracker.on('streamEnd', async (finalStream) => {
-    if (!notifEnabled(aid, 'notify_stream_end')) return;
-    const channel = await fetchChannel(client, aid, 'channel_announce');
+    if (!notifEnabled(account, 'notify_stream_end')) return;
+    const channel = await fetchChannel(client, account, 'channel_announce');
     if (!channel) return;
     try {
       const { EmbedBuilder } = await import('discord.js');
@@ -87,25 +87,25 @@ function setupTrackerListeners(client, inst) {
   });
 
   tracker.on('follow', async ({ twitchUserId, twitchUsername }) => {
-    const followerRoleId = getSetting(aid, 'role_follower');
+    const followerRoleId = getAccountSetting(account, 'role_follower');
     const link = scopedQueries(aid).links.getByTwitchId.get(twitchUserId);
     if (link && followerRoleId) await assignRoleToMember(client, link.discord_user_id, followerRoleId);
 
-    if (!notifEnabled(aid, 'notify_follows')) return;
-    const channel = await fetchChannel(client, aid, 'channel_follows');
+    if (!notifEnabled(account, 'notify_follows')) return;
+    const channel = await fetchChannel(client, account, 'channel_follows');
     if (!channel) return;
     try { await channel.send(`❤️ **${twitchUsername}** just followed on Twitch!`); }
     catch (err) { console.error('[discord] follow notify error:', err.message); }
   });
 
   tracker.on('subscribe', async ({ twitchUserId, twitchUsername, tier, isGift }) => {
-    const subRoleId = getSetting(aid, 'role_subscriber');
+    const subRoleId = getAccountSetting(account, 'role_subscriber');
     const link = scopedQueries(aid).links.getByTwitchId.get(twitchUserId);
     if (link && subRoleId) await assignRoleToMember(client, link.discord_user_id, subRoleId);
 
     if (isGift) return;
-    if (!notifEnabled(aid, 'notify_subs')) return;
-    const channel = await fetchChannel(client, aid, 'channel_subs');
+    if (!notifEnabled(account, 'notify_subs')) return;
+    const channel = await fetchChannel(client, account, 'channel_subs');
     if (!channel) return;
     try {
       const tierName = tier === '3000' ? 'Tier 3' : tier === '2000' ? 'Tier 2' : 'Tier 1';
@@ -114,25 +114,25 @@ function setupTrackerListeners(client, inst) {
   });
 
   tracker.on('subGift', async ({ gifterUsername, amount }) => {
-    if (!notifEnabled(aid, 'notify_giftsubs')) return;
-    const channel = await fetchChannel(client, aid, 'channel_subs');
+    if (!notifEnabled(account, 'notify_giftsubs')) return;
+    const channel = await fetchChannel(client, account, 'channel_subs');
     if (!channel) return;
     try { await channel.send(`🎁 **${gifterUsername}** gifted **${amount}** sub${amount > 1 ? 's' : ''}!`); }
     catch (err) { console.error('[discord] subgift error:', err.message); }
   });
 
   tracker.on('cheer', async ({ twitchUsername, bits }) => {
-    if (!notifEnabled(aid, 'notify_bits')) return;
-    const minimum = parseInt(getSetting(aid, 'notify_bits_minimum') ?? '1', 10);
+    if (!notifEnabled(account, 'notify_bits')) return;
+    const minimum = parseInt(getAccountSetting(account, 'notify_bits_minimum') ?? '1', 10);
     if (bits < minimum) return;
-    const channel = await fetchChannel(client, aid, 'channel_bits');
+    const channel = await fetchChannel(client, account, 'channel_bits');
     if (!channel) return;
     try { await channel.send(`💎 **${twitchUsername}** cheered **${bits}** bits!`); }
     catch (err) { console.error('[discord] bits error:', err.message); }
   });
 
   tracker.on('modAction', async ({ action, target, reason, moderator }) => {
-    const modLogId = getSetting(aid, 'channel_modlog');
+    const modLogId = getAccountSetting(account, 'channel_modlog');
     if (!modLogId) return;
     try {
       const { EmbedBuilder } = await import('discord.js');
@@ -211,8 +211,13 @@ export async function startDiscord(accountManager) {
     if (!cmd) return;
 
     const instances = accountManager.getByGuildId(interaction.guildId);
+    const group = interaction.options.getSubcommandGroup(false);
+    const sub = interaction.options.getSubcommand(false);
+    // Server-wide settings don't need a Twitch channel picked (or linked at all)
+    const serverLevel = interaction.commandName === 'setup' && (['channels', 'roles', 'notifications'].includes(group) || sub === 'view');
+    const accountOptional = serverLevel || interaction.commandName === 'account';
 
-    if (instances.length === 0 && interaction.commandName !== 'account') {
+    if (instances.length === 0 && !accountOptional) {
       const reply = { content: '⚠️ No Twitch account is linked to this server. An administrator must run `/account setup` first.', ephemeral: true };
       if (interaction.replied || interaction.deferred) await interaction.followUp(reply);
       else await interaction.reply(reply);
@@ -230,7 +235,7 @@ export async function startDiscord(accountManager) {
       }
     } else if (instances.length === 1) {
       inst = instances[0];
-    } else if (instances.length > 1 && interaction.commandName !== 'account') {
+    } else if (instances.length > 1 && !accountOptional) {
       const list = instances.map(i => `• \`${i.account.twitch_channel}\``).join('\n');
       await interaction.reply({ content: `ℹ️ Multiple Twitch channels are linked to this server. Add the \`twitch\` option to pick one:\n${list}`, ephemeral: true });
       return;
@@ -244,10 +249,15 @@ export async function startDiscord(accountManager) {
       getCurrentStream: inst.getCurrentStream,
       getFollowAge:     inst.getFollowAge,
       scopedQ:          scopedQueries(inst.account.id),
-      getSetting:       (key, fallback = null) => getSetting(inst.account.id, key, fallback),
-      setSetting:       (key, value)           => setSetting(inst.account.id, key, value),
+      getSetting:       (key, fallback = null) => getAccountSetting(inst.account, key, fallback),
+      setSetting:       (key, value)           => setAccountSetting(inst.account, key, value),
       accountManager,
-    } : { instances, accountManager };
+    } : {
+      instances,
+      accountManager,
+      getSetting: (key, fallback = null) => getSetting(guildScope(interaction.guildId), key, fallback),
+      setSetting: (key, value)           => setSetting(guildScope(interaction.guildId), key, value),
+    };
 
     try {
       await cmd.execute(interaction, context);
@@ -294,13 +304,26 @@ async function assignRoleToMember(client, discordUserId, roleId) {
   }
 }
 
+// Picked explicitly via /account streamer, else whoever ran /link twitch for this channel,
+// else a member whose Discord name matches the Twitch name.
+async function findStreamerMember(guild, account) {
+  const explicit = getSetting(account.id, 'streamer_discord_id') ?? findDiscordUserByTwitchId(account.twitch_broadcaster_id);
+  if (explicit) return guild.members.fetch(explicit).catch(() => null);
+  const name = account.twitch_channel.toLowerCase();
+  const found = await guild.members.search({ query: name, limit: 10 }).catch(() => null);
+  return found?.find(m => [m.user.username, m.user.globalName, m.nickname].some(n => n?.toLowerCase() === name)) ?? null;
+}
+
 async function setLiveRole(client, account, give) {
-  const roleId = getSetting(account.id, 'role_live');
-  const userId = getSetting(account.id, 'streamer_discord_id') ?? findDiscordUserByTwitchId(account.twitch_broadcaster_id);
-  if (!roleId || !userId || !account.discord_guild_id) return;
+  const roleId = getAccountSetting(account, 'role_live');
+  if (!roleId || !account.discord_guild_id) return;
   try {
     const guild = await client.guilds.fetch(account.discord_guild_id);
-    const member = await guild.members.fetch(userId);
+    const member = await findStreamerMember(guild, account);
+    if (!member) {
+      console.log(`[discord] live role: no Discord member found for ${account.twitch_channel} (they can run /link twitch)`);
+      return;
+    }
     if (give && !member.roles.cache.has(roleId)) await member.roles.add(roleId, `${account.twitch_channel} went live`);
     if (!give && member.roles.cache.has(roleId)) await member.roles.remove(roleId, `${account.twitch_channel} stream ended`);
   } catch (err) {

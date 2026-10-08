@@ -7,6 +7,8 @@ function channelOpt(opt) {
   return opt.addChannelTypes(ChannelType.GuildText);
 }
 
+const SERVER_WIDE_GROUPS = ['channels', 'roles', 'notifications'];
+
 export const setupCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('setup')
   .setDescription('Configure the stream bot')
@@ -71,9 +73,8 @@ export const setupCommand = withTwitchOption(new SlashCommandBuilder()
       )
       .addSubcommand(sub =>
         sub.setName('live')
-          .setDescription('Role given to the streamer while they are live, removed when the stream ends')
+          .setDescription('Role given to any linked streamer while they are live, removed when they end')
           .addRoleOption(o => o.setName('role').setDescription('Role (leave blank to clear)').setRequired(false))
-          .addUserOption(o => o.setName('streamer').setDescription('The Discord member who owns this Twitch channel').setRequired(false))
       )
   )
 
@@ -167,23 +168,23 @@ export const setupCommand = withTwitchOption(new SlashCommandBuilder()
           .setDescription('Time window in seconds for spam detection (default: 10s)')
           .addIntegerOption(o => o.setName('seconds').setDescription('Seconds (5–60)').setMinValue(5).setMaxValue(60).setRequired(true))
       )
-  ));
+  ), { skipGroups: SERVER_WIDE_GROUPS });
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-export async function setupHandler(interaction, { getSetting, setSetting, scopedQ }) {
+export async function setupHandler(interaction, { getSetting, setSetting, account, instances = [] }) {
   const sub = interaction.options.getSubcommand();
   const group = interaction.options.getSubcommandGroup(false);
 
   if (sub === 'view') {
-    await handleView(interaction, getSetting);
+    await handleView(interaction, getSetting, account, instances);
     return;
   }
 
   if (sub === 'reset') {
     const keys = [
       'channel_announce','channel_follows','channel_subs','channel_bits','channel_modlog',
-      'role_follower','role_subscriber','role_live','streamer_discord_id',
+      'role_follower','role_subscriber','role_live',
       'notify_stream_live','notify_stream_end','notify_follows','notify_subs',
       'notify_giftsubs','notify_bits','notify_bits_minimum',
       'automod_enabled','automod_links','automod_caps','automod_caps_threshold',
@@ -213,18 +214,10 @@ export async function setupHandler(interaction, { getSetting, setSetting, scoped
   if (group === 'roles') {
     const keyMap = { follower: 'role_follower', subscriber: 'role_subscriber', live: 'role_live' };
     const role = interaction.options.getRole('role');
-    const streamer = sub === 'live' ? interaction.options.getUser('streamer') : null;
-    if (role || !streamer) setSetting(keyMap[sub], role?.id ?? null);
-    let msg = role ? `✅ **${sub}** role set to ${role}` : streamer ? `✅ Streamer set to ${streamer}` : `✅ **${sub}** role cleared`;
-
-    if (sub === 'live') {
-      if (streamer) setSetting('streamer_discord_id', streamer.id);
-      const streamerId = getSetting('streamer_discord_id');
-      if (getSetting('role_live')) {
-        msg += streamerId
-          ? `\n🎙️ <@${streamerId}> gets it when they go live and loses it when the stream ends.`
-          : '\n⚠️ No streamer picked yet. Re-run with the `streamer` option, or have them run `/link twitch` with their own channel name.';
-      }
+    setSetting(keyMap[sub], role?.id ?? null);
+    let msg = role ? `✅ **${sub}** role set to ${role}` : `✅ **${sub}** role cleared`;
+    if (sub === 'live' && role) {
+      msg += '\n🎙️ Every linked streamer gets it when they go live and loses it when they end. I find their Discord account from `/link twitch`, or a Discord name matching their Twitch name.';
     }
 
     const me = interaction.guild.members.me;
@@ -333,7 +326,7 @@ async function handleNotificationsAll(interaction, getSetting, setSetting) {
 
 // ── /setup view ───────────────────────────────────────────────────────────────
 
-async function handleView(interaction, getSetting) {
+async function handleView(interaction, getSetting, account, instances) {
   await interaction.deferReply({ ephemeral: true });
 
   const g = (key, fallback = '_not set_') => getSetting(key) ?? fallback;
@@ -363,7 +356,7 @@ async function handleView(interaction, getSetting) {
         value: [
           `**Follower:** ${role('role_follower')}`,
           `**Subscriber:** ${role('role_subscriber')}`,
-          `**Live:** ${role('role_live')}${getSetting('streamer_discord_id') ? ` → given to <@${getSetting('streamer_discord_id')}>` : ''}`,
+          `**Live:** ${role('role_live')} _(given to whichever streamer is live)_`,
         ].join('\n'),
         inline: false,
       },
@@ -380,17 +373,19 @@ async function handleView(interaction, getSetting) {
         inline: false,
       },
       {
-        name: '🛡️ Auto-Mod',
-        value: [
+        name: account ? `🛡️ Twitch Auto-Mod — ${account.twitch_channel}` : '🛡️ Twitch Auto-Mod',
+        value: account ? [
           `**Master switch:** ${bool('automod_enabled')}`,
           `**Link filter:** ${bool('automod_links')}`,
           `**Caps filter:** ${bool('automod_caps')} (threshold: ${g('automod_caps_threshold', '75')}%)`,
           `**Spam filter:** ${bool('automod_spam')} (${g('automod_spam_count', '4')} repeats in ${g('automod_spam_window', '10')}s)`,
-        ].join('\n'),
+        ].join('\n') : instances.length
+          ? 'Set per Twitch channel — add `twitch:<channel>` to see it.'
+          : 'No Twitch channel linked yet.',
         inline: false,
       },
     )
-    .setFooter({ text: 'Use /setup <group> <setting> to change anything' })
+    .setFooter({ text: 'Channels, roles & notifications apply to every linked streamer. Auto-mod is per Twitch channel.' })
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
