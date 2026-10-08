@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { getLinkByDiscordId, removeLinks, saveLink } from '../../db/index.js';
 
 export const linkCommand = new SlashCommandBuilder()
@@ -12,7 +12,9 @@ export const linkCommand = new SlashCommandBuilder()
       )
   )
   .addSubcommand(sub =>
-    sub.setName('remove').setDescription('Remove your linked Twitch account')
+    sub.setName('remove')
+      .setDescription('Remove your linked Twitch account (admins can remove someone else\'s)')
+      .addUserOption(o => o.setName('member').setDescription('Admins only: whose link to remove').setRequired(false))
   )
   .addSubcommand(sub =>
     sub.setName('status').setDescription('Check your link and re-check your follower role')
@@ -45,6 +47,16 @@ export async function linkHandler(interaction, { instances = [], getSetting }) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'remove') {
+    const target = interaction.options.getUser('member');
+    if (target && target.id !== interaction.user.id) {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: 'Only admins (Manage Server) can remove someone else\'s link.', ephemeral: true });
+        return;
+      }
+      const removed = removeLinks(target.id);
+      await interaction.reply({ content: removed ? `✅ Removed ${target}'s Twitch link.` : `${target} had no Twitch account linked.`, ephemeral: true });
+      return;
+    }
     const removed = removeLinks(interaction.user.id);
     await interaction.reply({ content: removed ? '✅ Your Twitch account has been unlinked.' : 'You had no Twitch account linked.', ephemeral: true });
     return;
@@ -83,11 +95,15 @@ export async function linkHandler(interaction, { instances = [], getSetting }) {
     return;
   }
 
-  saveLink(interaction.guildId, {
+  const saved = saveLink(interaction.guildId, {
     discord_user_id: interaction.user.id,
     twitch_user_id: twitchUser.id,
     twitch_username: twitchUser.name,
   });
+  if (!saved.ok) {
+    await interaction.editReply(`❌ **${twitchUser.displayName}** is already linked to another Discord account (<@${saved.ownerId}>). They need to run \`/link remove\` first — or ask an admin if it isn't really theirs.`);
+    return;
+  }
 
   const { note } = await syncFollowerRole(interaction, instances, twitchUser.id, getSetting);
   await interaction.editReply(`✅ Linked Discord account to Twitch **${twitchUser.displayName}**.${note}`);

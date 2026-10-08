@@ -328,10 +328,16 @@ export function removeLinks(discordUserId) {
   return getDb().prepare(`DELETE FROM discord_links WHERE discord_user_id = ?`).run(discordUserId).changes;
 }
 
+// A Twitch account can be claimed by only one Discord user; returns the current owner if taken.
 export function saveLink(guildId, link) {
-  getDb().transaction(() => {
+  return getDb().transaction(() => {
+    const owner = getDb()
+      .prepare(`SELECT discord_user_id FROM discord_links WHERE twitch_user_id = ? AND discord_user_id != ? LIMIT 1`)
+      .get(link.twitch_user_id, link.discord_user_id);
+    if (owner) return { ok: false, ownerId: owner.discord_user_id };
     removeLinks(link.discord_user_id);
     scopedQueries(guildScope(guildId)).links.upsert.run(link);
+    return { ok: true };
   })();
 }
 

@@ -109,6 +109,15 @@ export async function accountHandler(interaction, { account, instances = [], acc
   }
 }
 
+// A Twitch channel can be connected to one Discord server until it's removed there.
+function connectedElsewhere(twitchId, guildId) {
+  const existing = accountQueries().getById.get(twitchId);
+  return existing?.enabled && existing.discord_guild_id && existing.discord_guild_id !== guildId ? existing : null;
+}
+
+const ELSEWHERE_MSG = (name) =>
+  `❌ **${name}** is already connected to another Discord server. Run \`/account remove twitch:${name}\` in that server first.`;
+
 async function startLinkFlow(interaction, accountManager) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -139,6 +148,10 @@ async function startLinkFlow(interaction, accountManager) {
     try {
       const token = await waitForDeviceToken(device);
       const user = await validateToken(token.access_token);
+      if (connectedElsewhere(user.user_id, interaction.guildId)) {
+        await interaction.editReply({ content: ELSEWHERE_MSG(user.login), components: [] }).catch(() => {});
+        return;
+      }
       await accountManager.addAccount({
         id: user.user_id,
         twitch_channel: user.login.toLowerCase(),
@@ -169,6 +182,11 @@ export async function handleAccountSetupModal(interaction, accountManager) {
 
   if (!/^\d+$/.test(broadcasterId)) {
     await interaction.editReply('❌ Broadcaster ID must be numeric. Find it at https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/');
+    return;
+  }
+
+  if (connectedElsewhere(broadcasterId, interaction.guildId)) {
+    await interaction.editReply(ELSEWHERE_MSG(channelName));
     return;
   }
 
