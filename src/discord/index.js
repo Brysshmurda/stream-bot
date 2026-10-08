@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Collection, Events, REST, Routes } from 'discord.js';
 import { config } from '../config.js';
-import { getSetting, setSetting, scopedQueries } from '../db/index.js';
+import { getSetting, setSetting, scopedQueries, findDiscordUserByTwitchId } from '../db/index.js';
 
 import { statsCommand, statsHandler } from './commands/stats.js';
 import { historyCommand, historyHandler } from './commands/history.js';
@@ -60,11 +60,12 @@ function setupTrackerListeners(client, inst) {
         )
         .setColor(0x9146ff).setTimestamp();
       await channel.send({ embeds: [embed] });
-
-      const liveRoleId = getSetting(aid, 'role_live');
-      if (liveRoleId) await removeRoleFromAll(client, liveRoleId);
     } catch (err) { console.error('[discord] stream announce error:', err.message); }
   });
+
+  tracker.on('streamStart', () => setLiveRole(client, account, true));
+  tracker.on('streamEnd', () => setLiveRole(client, account, false));
+  tracker.on('offlineAtStartup', () => setLiveRole(client, account, false));
 
   tracker.on('streamEnd', async (finalStream) => {
     if (!notifEnabled(aid, 'notify_stream_end')) return;
@@ -82,9 +83,6 @@ function setupTrackerListeners(client, inst) {
         )
         .setColor(0x6441a5).setTimestamp();
       await channel.send({ embeds: [embed] });
-
-      const liveRoleId = getSetting(aid, 'role_live');
-      if (liveRoleId) await removeRoleFromAll(client, liveRoleId);
     } catch (err) { console.error('[discord] stream end error:', err.message); }
   });
 
@@ -296,14 +294,16 @@ async function assignRoleToMember(client, discordUserId, roleId) {
   }
 }
 
-async function removeRoleFromAll(client, roleId) {
+async function setLiveRole(client, account, give) {
+  const roleId = getSetting(account.id, 'role_live');
+  const userId = getSetting(account.id, 'streamer_discord_id') ?? findDiscordUserByTwitchId(account.twitch_broadcaster_id);
+  if (!roleId || !userId || !account.discord_guild_id) return;
   try {
-    for (const guild of client.guilds.cache.values()) {
-      const members = await guild.members.fetch().catch(() => null);
-      if (!members) continue;
-      await Promise.all(members.filter(m => m.roles.cache.has(roleId)).map(m => m.roles.remove(roleId).catch(() => {})));
-    }
+    const guild = await client.guilds.fetch(account.discord_guild_id);
+    const member = await guild.members.fetch(userId);
+    if (give && !member.roles.cache.has(roleId)) await member.roles.add(roleId, `${account.twitch_channel} went live`);
+    if (!give && member.roles.cache.has(roleId)) await member.roles.remove(roleId, `${account.twitch_channel} stream ended`);
   } catch (err) {
-    console.error('[discord] remove live role error:', err.message);
+    console.error(`[discord] live role error (${account.twitch_channel}):`, err.message);
   }
 }

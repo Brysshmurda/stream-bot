@@ -74,6 +74,9 @@ class AccountManager extends EventEmitter {
         gameId: live.gameId,
         startedAt: live.startDate?.toISOString() ?? new Date().toISOString(),
       });
+    } else {
+      // Clears a live role left behind if the stream ended while the bot was down
+      tracker.emit('offlineAtStartup');
     }
 
     console.log(`[accounts] Started: ${account.twitch_channel}`);

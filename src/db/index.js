@@ -301,6 +301,12 @@ export function scopedQueries(accountId, db = getDb()) {
 
 // ── Helper wrappers ───────────────────────────────────────────────────────────
 
+// Searches links across every account, so a streamer who ran /link twitch in any scope is found.
+export function findDiscordUserByTwitchId(twitchUserId) {
+  const row = getDb().prepare(`SELECT discord_user_id FROM discord_links WHERE twitch_user_id = ? LIMIT 1`).get(twitchUserId);
+  return row?.discord_user_id ?? null;
+}
+
 export function getSetting(accountId, key, fallback = null) {
   const row = scopedQueries(accountId).settings.get.get(key);
   return row ? row.value : fallback;
