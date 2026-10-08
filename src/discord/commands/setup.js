@@ -81,6 +81,16 @@ export const setupCommand = withTwitchOption(new SlashCommandBuilder()
     group.setName('notifications')
       .setDescription('Toggle which events trigger Discord notifications')
       .addSubcommand(sub =>
+        sub.setName('all')
+          .setDescription('Turn every notification on/off and optionally pick a channel for each type')
+          .addStringOption(o => o.setName('value').setDescription('On or off').setRequired(true).addChoices(...ON_OFF))
+          .addChannelOption(o => channelOpt(o.setName('live').setDescription('Channel for live/offline posts (also the fallback for the others)').setRequired(false)))
+          .addChannelOption(o => channelOpt(o.setName('follows').setDescription('Channel for new followers').setRequired(false)))
+          .addChannelOption(o => channelOpt(o.setName('subs').setDescription('Channel for subs and gift subs').setRequired(false)))
+          .addChannelOption(o => channelOpt(o.setName('bits').setDescription('Channel for bits/cheers').setRequired(false)))
+          .addChannelOption(o => channelOpt(o.setName('modlog').setDescription('Channel for mod action logs').setRequired(false)))
+      )
+      .addSubcommand(sub =>
         sub.setName('stream-live')
           .setDescription('Announce when the stream goes live')
           .addStringOption(o => o.setName('value').setDescription('On or off').setRequired(true).addChoices(...ON_OFF))
@@ -187,8 +197,15 @@ export async function setupHandler(interaction, { getSetting, setSetting, scoped
     const keyMap = { announce: 'channel_announce', follows: 'channel_follows', subs: 'channel_subs', bits: 'channel_bits', modlog: 'channel_modlog' };
     const channel = interaction.options.getChannel('channel');
     setSetting(keyMap[sub], channel?.id ?? null);
-    const msg = channel ? `✅ **${sub}** channel set to ${channel}` : `✅ **${sub}** channel cleared (will use announce channel as fallback)`;
+    let msg = channel ? `✅ **${sub}** channel set to ${channel}` : `✅ **${sub}** channel cleared (will use announce channel as fallback)`;
+    const missing = channel ? missingPerms(channel) : [];
+    if (missing.length) msg += `\n⚠️ I can't post there yet — give me **${missing.join(', ')}** in ${channel}.`;
     await interaction.reply({ content: msg, ephemeral: true });
+    return;
+  }
+
+  if (group === 'notifications' && sub === 'all') {
+    await handleNotificationsAll(interaction, getSetting, setSetting);
     return;
   }
 
@@ -239,6 +256,61 @@ export async function setupHandler(interaction, { getSetting, setSetting, scoped
     }
     return;
   }
+}
+
+// ── /setup notifications all ──────────────────────────────────────────────────
+
+const NOTIFY_KEYS = ['notify_stream_live', 'notify_stream_end', 'notify_follows', 'notify_subs', 'notify_giftsubs', 'notify_bits'];
+
+const ROUTES = [
+  { opt: 'live',    key: 'channel_announce', label: '🔴 Live / offline' },
+  { opt: 'follows', key: 'channel_follows',  label: '❤️ Follows' },
+  { opt: 'subs',    key: 'channel_subs',     label: '⭐ Subs & gift subs' },
+  { opt: 'bits',    key: 'channel_bits',     label: '💎 Bits' },
+  { opt: 'modlog',  key: 'channel_modlog',   label: '🔨 Mod log' },
+];
+
+function missingPerms(channel) {
+  const me = channel.guild?.members?.me;
+  if (!me || typeof channel.permissionsFor !== 'function') return [];
+  const perms = channel.permissionsFor(me);
+  return [['ViewChannel', 'View Channel'], ['SendMessages', 'Send Messages'], ['EmbedLinks', 'Embed Links']]
+    .filter(([flag]) => !perms?.has(PermissionFlagsBits[flag]))
+    .map(([, name]) => name);
+}
+
+async function handleNotificationsAll(interaction, getSetting, setSetting) {
+  const value = interaction.options.getString('value');
+  for (const k of NOTIFY_KEYS) setSetting(k, value);
+
+  for (const { opt, key } of ROUTES) {
+    const ch = interaction.options.getChannel(opt);
+    if (ch) setSetting(key, ch.id);
+  }
+
+  const announceId = getSetting('channel_announce');
+  const warnings = [];
+  const lines = [];
+  for (const { opt, key, label } of ROUTES) {
+    const ownId = getSetting(key);
+    const id = ownId ?? (key === 'channel_modlog' ? null : announceId);
+    if (!id) { lines.push(`${label} → _nowhere_`); continue; }
+    lines.push(`${label} → <#${id}>${ownId || key === 'channel_announce' ? '' : ' _(live channel)_'}`);
+    const ch = interaction.options.getChannel(opt) ?? interaction.guild.channels.cache.get(id);
+    const missing = ch ? missingPerms(ch) : [];
+    if (missing.length && !warnings.some(w => w.includes(`<#${id}>`))) {
+      warnings.push(`⚠️ I need **${missing.join(', ')}** in <#${id}>`);
+    }
+  }
+  if (value === 'true' && !announceId) warnings.unshift('⚠️ No live channel set, so live/follow/sub/bits posts have nowhere to go. Re-run with the `live` option.');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🔔 All notifications turned ${value === 'true' ? 'ON' : 'OFF'}`)
+    .setDescription([...lines, ...(warnings.length ? ['', ...warnings] : [])].join('\n'))
+    .setColor(value === 'true' ? 0x00c853 : 0x9e9e9e)
+    .setFooter({ text: 'Fine-tune with /setup notifications <type> or /setup channels <type>' });
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 // ── /setup view ───────────────────────────────────────────────────────────────
