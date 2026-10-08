@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { getLinkByDiscordId, removeLinks, saveLink } from '../../db/index.js';
+import { followerRoleKey } from './setup.js';
 
 export const linkCommand = new SlashCommandBuilder()
   .setName('link')
@@ -20,26 +21,33 @@ export const linkCommand = new SlashCommandBuilder()
     sub.setName('status').setDescription('Check your link and re-check your follower role')
   );
 
-// Twitch only reports new follows, so ask it directly whether this person already follows any linked channel.
+// Twitch only reports new follows, so ask it directly which linked channels this person already follows,
+// and give each one's follower role (or the server-wide one where a channel has none).
 async function syncFollowerRole(interaction, instances, twitchUserId, getSetting) {
-  const results = await Promise.all(instances.map(async (i) => ({
-    channel: i.account.twitch_channel,
-    follows: Boolean(await i.getFollowAge(twitchUserId).catch(() => null)),
+  const roleFor = (i) => getSetting(followerRoleKey(i.account.id)) ?? getSetting('role_follower');
+  const checked = await Promise.all(instances.map(async (i) => ({
+    i, follows: Boolean(await i.getFollowAge(twitchUserId).catch(() => null)),
   })));
-  const followed = results.filter(r => r.follows).map(r => r.channel);
-  const roleId = getSetting('role_follower');
+  const followedInsts = checked.filter(c => c.follows).map(c => c.i);
+  const followed = followedInsts.map(i => i.account.twitch_channel);
 
-  if (!roleId) return { followed, note: '' };
-  if (!followed.length) return { followed, note: `\nYou don't follow ${instances.map(i => `**${i.account.twitch_channel}**`).join(' or ')} yet — follow on Twitch and you'll get the Follower role automatically.` };
+  const notFollowedWithRole = instances.filter(i => !followedInsts.includes(i) && roleFor(i));
+  const hint = notFollowedWithRole.length
+    ? `\nFollow ${notFollowedWithRole.map(i => `**${i.account.twitch_channel}**`).join(' or ')} on Twitch to get ${notFollowedWithRole.length > 1 ? 'their' : 'its'} follower role.`
+    : '';
+
+  const roleIds = [...new Set(followedInsts.map(roleFor).filter(Boolean))];
+  if (!roleIds.length) return { followed, note: hint };
 
   try {
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    if (member.roles.cache.has(roleId)) return { followed, note: '' };
-    await member.roles.add(roleId);
-    return { followed, note: '\n🎉 You\'ve been given the **Follower** role!' };
+    const missing = roleIds.filter(r => !member.roles.cache.has(r));
+    if (missing.length) await member.roles.add(missing);
+    const given = missing.length ? `\n🎉 You've been given ${missing.map(r => `<@&${r}>`).join(', ')}!` : '';
+    return { followed, note: given + hint };
   } catch (err) {
     console.error('[link] follower role error:', err.message);
-    return { followed, note: '\n⚠️ You follow, but I couldn\'t give you the Follower role. An admin needs to check my **Manage Roles** permission and that my role is above the Follower role.' };
+    return { followed, note: '\n⚠️ You follow, but I couldn\'t give you the follower role. An admin needs to check my **Manage Roles** permission and that my role is above the follower roles.' + hint };
   }
 }
 

@@ -9,6 +9,8 @@ function channelOpt(opt) {
 
 const SERVER_WIDE_GROUPS = ['channels', 'roles', 'notifications'];
 
+export const followerRoleKey = (accountId) => `role_follower:${accountId}`;
+
 export const setupCommand = withTwitchOption(new SlashCommandBuilder()
   .setName('setup')
   .setDescription('Configure the stream bot')
@@ -63,8 +65,9 @@ export const setupCommand = withTwitchOption(new SlashCommandBuilder()
       .setDescription('Set which roles are assigned automatically')
       .addSubcommand(sub =>
         sub.setName('follower')
-          .setDescription('Role given when a Twitch follower links their Discord account')
+          .setDescription('Role for followers — pick a Twitch channel to give a role just for that channel\'s followers')
           .addRoleOption(o => o.setName('role').setDescription('Role (leave blank to clear)').setRequired(false))
+          .addStringOption(o => o.setName('twitch').setDescription('Twitch channel this role is for (leave blank = followers of any channel)').setRequired(false).setAutocomplete(true))
       )
       .addSubcommand(sub =>
         sub.setName('subscriber')
@@ -190,7 +193,7 @@ export async function setupHandler(interaction, { getSetting, setSetting, accoun
       'automod_enabled','automod_links','automod_caps','automod_caps_threshold',
       'automod_spam','automod_spam_count','automod_spam_window',
     ];
-    for (const k of keys) setSetting(k, null);
+    for (const k of [...keys, ...instances.map(i => followerRoleKey(i.account.id))]) setSetting(k, null);
     await interaction.reply({ content: '✅ All settings have been reset to defaults.', ephemeral: true });
     return;
   }
@@ -214,8 +217,16 @@ export async function setupHandler(interaction, { getSetting, setSetting, accoun
   if (group === 'roles') {
     const keyMap = { follower: 'role_follower', subscriber: 'role_subscriber', live: 'role_live' };
     const role = interaction.options.getRole('role');
-    setSetting(keyMap[sub], role?.id ?? null);
-    let msg = role ? `✅ **${sub}** role set to ${role}` : `✅ **${sub}** role cleared`;
+    const forChannel = sub === 'follower' && interaction.options.getString('twitch') ? account : null;
+    const key = forChannel ? followerRoleKey(forChannel.id) : keyMap[sub];
+    const label = forChannel ? `**${forChannel.twitch_channel} follower**` : `**${sub}**`;
+    setSetting(key, role?.id ?? null);
+    let msg = role ? `✅ ${label} role set to ${role}` : `✅ ${label} role cleared`;
+    if (sub === 'follower' && role) {
+      msg += forChannel
+        ? `\n❤️ People who follow **${forChannel.twitch_channel}** get it when they follow or link their Twitch.`
+        : '\n❤️ Given for following any linked channel that doesn\'t have its own follower role.';
+    }
     if (sub === 'live' && role) {
       msg += '\n🎙️ Every linked streamer gets it when they go live and loses it when they end. I find their Discord account from `/link twitch`, or a Discord name matching their Twitch name.';
     }
@@ -354,7 +365,8 @@ async function handleView(interaction, getSetting, account, instances) {
       {
         name: '🎭 Roles',
         value: [
-          `**Follower:** ${role('role_follower')}`,
+          ...instances.map(i => getSetting(followerRoleKey(i.account.id)) ? `**${i.account.twitch_channel} followers:** <@&${getSetting(followerRoleKey(i.account.id))}>` : null).filter(Boolean),
+          `**Follower (any channel):** ${role('role_follower')}`,
           `**Subscriber:** ${role('role_subscriber')}`,
           `**Live:** ${role('role_live')} _(given to whichever streamer is live)_`,
         ].join('\n'),

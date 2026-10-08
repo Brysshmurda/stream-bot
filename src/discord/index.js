@@ -6,7 +6,7 @@ import { statsCommand, statsHandler } from './commands/stats.js';
 import { historyCommand, historyHandler } from './commands/history.js';
 import { topgamesCommand, topgamesHandler } from './commands/topgames.js';
 import { linkCommand, linkHandler } from './commands/link.js';
-import { setupCommand, setupHandler } from './commands/setup.js';
+import { setupCommand, setupHandler, followerRoleKey } from './commands/setup.js';
 import { modCommand, modHandler } from './commands/mod.js';
 import { bannedwordsCommand, bannedwordsHandler } from './commands/bannedwords.js';
 import { accountCommand, accountHandler, handleAccountSetupModal } from './commands/account.js';
@@ -85,7 +85,7 @@ function setupTrackerListeners(client, inst) {
   }));
 
   tracker.on('follow', perGuild('follow', async (gid, { twitchUserId, twitchUsername }) => {
-    const roleId = setting(gid, 'role_follower');
+    const roleId = setting(gid, followerRoleKey(aid)) ?? setting(gid, 'role_follower');
     const discordUserId = findDiscordUserByTwitchId(twitchUserId);
     if (discordUserId && roleId) await assignRoleToMember(client, gid, discordUserId, roleId);
     await notify(gid, 'notify_follows', 'channel_follows', `❤️ **${twitchUsername}** just followed **${account.twitch_channel}** on Twitch!`);
