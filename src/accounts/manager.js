@@ -84,6 +84,11 @@ class AccountManager extends EventEmitter {
     const aq = accountQueries();
     aq.upsert.run(accountData);
     const account = aq.getById.get(accountData.id);
+    const running = this._instances.get(account.id);
+    if (running) {
+      Object.assign(running.account, account);
+      return running;
+    }
     return this._startAccount(account);
   }
 

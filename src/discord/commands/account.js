@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import { accountQueries } from '../../db/index.js';
+import { startDeviceAuth, waitForDeviceToken, validateToken } from '../../twitch/deviceAuth.js';
 
 export const accountCommand = new SlashCommandBuilder()
   .setName('account')
@@ -8,7 +9,11 @@ export const accountCommand = new SlashCommandBuilder()
 
   .addSubcommand(sub =>
     sub.setName('setup')
-      .setDescription('Link a Twitch account to this Discord server (opens a form)')
+      .setDescription('Get a sign-in link that connects a Twitch channel to this server')
+  )
+  .addSubcommand(sub =>
+    sub.setName('manual')
+      .setDescription('Link a Twitch account by pasting tokens (advanced)')
   )
   .addSubcommand(sub =>
     sub.setName('status')
@@ -24,6 +29,11 @@ export async function accountHandler(interaction, { account, instances = [], acc
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'setup') {
+    await startLinkFlow(interaction, accountManager);
+    return;
+  }
+
+  if (sub === 'manual') {
     const modal = new ModalBuilder()
       .setCustomId('account_setup_modal')
       .setTitle('Link Twitch Account');
@@ -77,6 +87,56 @@ export async function accountHandler(interaction, { account, instances = [], acc
     await interaction.reply({ content: `✅ Unlinked **${account.twitch_channel}** from this Discord server. The Twitch tracking will continue but notifications won't post here.`, ephemeral: true });
     return;
   }
+}
+
+async function startLinkFlow(interaction, accountManager) {
+  await interaction.deferReply({ ephemeral: true });
+
+  let device;
+  try {
+    device = await startDeviceAuth();
+  } catch (err) {
+    console.error('[account setup] device auth error:', err.message);
+    await interaction.editReply(`❌ Couldn't start Twitch sign-in: ${err.message}\nYou can still use \`/account manual\`.`);
+    return;
+  }
+
+  const minutes = Math.floor(device.expires_in / 60);
+  const button = new ButtonBuilder().setLabel('Connect Twitch').setStyle(ButtonStyle.Link).setURL(device.verification_uri);
+  await interaction.editReply({
+    content: [
+      '**Send this link to the streamer you want to add** (or click it yourself to add your own channel):',
+      device.verification_uri,
+      '',
+      `They just open it, log in to Twitch and click **Authorize**. If Twitch asks for a code, it's **${device.user_code}**.`,
+      `⏳ The link works for ${minutes} minutes. Only share it with that streamer — whoever uses it gets linked to this server.`,
+    ].join('\n'),
+    components: [new ActionRowBuilder().addComponents(button)],
+  });
+
+  // Runs after the reply so the command doesn't block while waiting for the streamer.
+  (async () => {
+    try {
+      const token = await waitForDeviceToken(device);
+      const user = await validateToken(token.access_token);
+      await accountManager.addAccount({
+        id: user.user_id,
+        twitch_channel: user.login.toLowerCase(),
+        twitch_broadcaster_id: user.user_id,
+        discord_guild_id: interaction.guildId,
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+      });
+      console.log(`[account setup] Linked ${user.login} to guild ${interaction.guildId}`);
+      const count = accountManager.getByGuildId(interaction.guildId).length;
+      const tip = count > 1 ? ` Commands can target it with \`twitch:${user.login}\`.` : '';
+      await interaction.editReply({ content: `✅ **${user.login}** is connected! Go-live alerts and Twitch chat commands are now active.${tip}`, components: [] }).catch(() => {});
+      await interaction.channel?.send(`🎉 Twitch channel **${user.login}** is now connected to this server!`).catch(() => {});
+    } catch (err) {
+      console.error('[account setup] link failed:', err.message);
+      await interaction.editReply({ content: `❌ Linking didn't finish: ${err.message}. Run \`/account setup\` to get a fresh link.`, components: [] }).catch(() => {});
+    }
+  })();
 }
 
 export async function handleAccountSetupModal(interaction, accountManager) {

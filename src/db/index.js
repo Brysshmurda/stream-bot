@@ -179,7 +179,8 @@ export function accountQueries(db = getDb()) {
         twitch_channel = excluded.twitch_channel,
         discord_guild_id = excluded.discord_guild_id,
         access_token = excluded.access_token,
-        refresh_token = excluded.refresh_token
+        refresh_token = excluded.refresh_token,
+        enabled = 1
     `),
     getAll:          db.prepare(`SELECT * FROM accounts WHERE enabled = 1`),
     getById:         db.prepare(`SELECT * FROM accounts WHERE id = ?`),
