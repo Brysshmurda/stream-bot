@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import { accountQueries, setSetting } from '../../db/index.js';
+import { setSetting } from '../../db/index.js';
 import { startDeviceAuth, waitForDeviceToken, validateToken } from '../../twitch/deviceAuth.js';
 
 export const accountCommand = new SlashCommandBuilder()
@@ -102,21 +102,14 @@ export async function accountHandler(interaction, { account, instances = [], acc
       await interaction.reply({ content: msg, ephemeral: true });
       return;
     }
-    accountQueries().setGuildId.run(null, account.id);
-    accountManager.disableAccount(account.id);
-    await interaction.reply({ content: `✅ Unlinked **${account.twitch_channel}** from this Discord server. The Twitch tracking will continue but notifications won't post here.`, ephemeral: true });
+    const { stillConnected } = await accountManager.removeFromGuild(account.id, interaction.guildId);
+    const rest = stillConnected
+      ? 'It stays connected to the other Discord servers it was added to.'
+      : 'It isn\'t connected to any other server, so the bot has left its Twitch chat and stopped tracking it.';
+    await interaction.reply({ content: `✅ Unlinked **${account.twitch_channel}** from this Discord server. ${rest}`, ephemeral: true });
     return;
   }
 }
-
-// A Twitch channel can be connected to one Discord server until it's removed there.
-function connectedElsewhere(twitchId, guildId) {
-  const existing = accountQueries().getById.get(twitchId);
-  return existing?.enabled && existing.discord_guild_id && existing.discord_guild_id !== guildId ? existing : null;
-}
-
-const ELSEWHERE_MSG = (name) =>
-  `❌ **${name}** is already connected to another Discord server. Run \`/account remove twitch:${name}\` in that server first.`;
 
 async function startLinkFlow(interaction, accountManager) {
   await interaction.deferReply({ ephemeral: true });
@@ -148,18 +141,13 @@ async function startLinkFlow(interaction, accountManager) {
     try {
       const token = await waitForDeviceToken(device);
       const user = await validateToken(token.access_token);
-      if (connectedElsewhere(user.user_id, interaction.guildId)) {
-        await interaction.editReply({ content: ELSEWHERE_MSG(user.login), components: [] }).catch(() => {});
-        return;
-      }
       await accountManager.addAccount({
         id: user.user_id,
         twitch_channel: user.login.toLowerCase(),
         twitch_broadcaster_id: user.user_id,
-        discord_guild_id: interaction.guildId,
         access_token: token.access_token,
         refresh_token: token.refresh_token,
-      });
+      }, interaction.guildId);
       console.log(`[account setup] Linked ${user.login} to guild ${interaction.guildId}`);
       const count = accountManager.getByGuildId(interaction.guildId).length;
       const tip = count > 1 ? ` Commands can target it with \`twitch:${user.login}\`.` : '';
@@ -185,20 +173,14 @@ export async function handleAccountSetupModal(interaction, accountManager) {
     return;
   }
 
-  if (connectedElsewhere(broadcasterId, interaction.guildId)) {
-    await interaction.editReply(ELSEWHERE_MSG(channelName));
-    return;
-  }
-
   try {
     const inst = await accountManager.addAccount({
       id: broadcasterId,
       twitch_channel: channelName,
       twitch_broadcaster_id: broadcasterId,
-      discord_guild_id: interaction.guildId,
       access_token: accessToken,
       refresh_token: refreshToken,
-    });
+    }, interaction.guildId);
 
     const count = accountManager.getByGuildId(interaction.guildId).length;
     const multiNote = count > 1 ? `\n\nThis server now has **${count}** Twitch channels linked — add \`twitch:${channelName}\` to commands to target this one.` : '';

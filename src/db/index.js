@@ -18,6 +18,12 @@ export function getDb() {
 // ── Schema + migrations ───────────────────────────────────────────────────────
 
 const TABLES = {
+  account_guilds: `
+    CREATE TABLE IF NOT EXISTS account_guilds (
+      account_id TEXT NOT NULL,
+      guild_id   TEXT NOT NULL,
+      PRIMARY KEY (account_id, guild_id)
+    )`,
   accounts: `
     CREATE TABLE IF NOT EXISTS accounts (
       id                    TEXT PRIMARY KEY,
@@ -175,6 +181,13 @@ function migrate(db) {
       DELETE FROM settings AS s
       WHERE s.account_id IN (SELECT id FROM accounts WHERE discord_guild_id IS NOT NULL) AND ${guildKeyFilter};
     `);
+
+    // One Twitch channel can be connected to many Discord servers; accounts.discord_guild_id is retired
+    db.exec(`
+      INSERT OR IGNORE INTO account_guilds (account_id, guild_id)
+      SELECT id, discord_guild_id FROM accounts WHERE discord_guild_id IS NOT NULL AND enabled = 1;
+      UPDATE accounts SET discord_guild_id = NULL WHERE discord_guild_id IS NOT NULL;
+    `);
   })();
   db.pragma('foreign_keys = ON');
   db.pragma('user_version = 3');
@@ -185,20 +198,20 @@ function migrate(db) {
 export function accountQueries(db = getDb()) {
   return {
     upsert: db.prepare(`
-      INSERT INTO accounts (id, twitch_channel, twitch_broadcaster_id, discord_guild_id, access_token, refresh_token)
-      VALUES (@id, @twitch_channel, @twitch_broadcaster_id, @discord_guild_id, @access_token, @refresh_token)
+      INSERT INTO accounts (id, twitch_channel, twitch_broadcaster_id, access_token, refresh_token)
+      VALUES (@id, @twitch_channel, @twitch_broadcaster_id, @access_token, @refresh_token)
       ON CONFLICT(id) DO UPDATE SET
         twitch_channel = excluded.twitch_channel,
-        discord_guild_id = excluded.discord_guild_id,
         access_token = excluded.access_token,
         refresh_token = excluded.refresh_token,
         enabled = 1
     `),
     getAll:          db.prepare(`SELECT * FROM accounts WHERE enabled = 1`),
     getById:         db.prepare(`SELECT * FROM accounts WHERE id = ?`),
-    getByGuildId:    db.prepare(`SELECT * FROM accounts WHERE discord_guild_id = ?`),
     getByChannel:    db.prepare(`SELECT * FROM accounts WHERE twitch_channel = ?`),
-    setGuildId:      db.prepare(`UPDATE accounts SET discord_guild_id = ? WHERE id = ?`),
+    addGuild:        db.prepare(`INSERT OR IGNORE INTO account_guilds (account_id, guild_id) VALUES (?, ?)`),
+    removeGuild:     db.prepare(`DELETE FROM account_guilds WHERE account_id = ? AND guild_id = ?`),
+    guildsFor:       db.prepare(`SELECT guild_id FROM account_guilds WHERE account_id = ?`),
     updateTokens:    db.prepare(`UPDATE accounts SET access_token = ?, refresh_token = ? WHERE id = ?`),
     disable:         db.prepare(`UPDATE accounts SET enabled = 0 WHERE id = ?`),
     delete:          db.prepare(`DELETE FROM accounts WHERE id = ?`),
@@ -350,15 +363,14 @@ export function getSetting(accountId, key, fallback = null) {
 // every Twitch account linked to it; everything else (automod etc.) stays per account.
 const GUILD_KEY = /^(channel_|role_|notify_)/;
 export const guildScope = (guildId) => `guild_${guildId}`;
-const scopeFor = (account, key) =>
-  GUILD_KEY.test(key) && account.discord_guild_id ? guildScope(account.discord_guild_id) : account.id;
+const scopeFor = (accountId, guildId, key) => GUILD_KEY.test(key) && guildId ? guildScope(guildId) : accountId;
 
-export function getAccountSetting(account, key, fallback = null) {
-  return getSetting(scopeFor(account, key), key, fallback);
+export function getScopedSetting(accountId, guildId, key, fallback = null) {
+  return getSetting(scopeFor(accountId, guildId, key), key, fallback);
 }
 
-export function setAccountSetting(account, key, value) {
-  setSetting(scopeFor(account, key), key, value);
+export function setScopedSetting(accountId, guildId, key, value) {
+  setSetting(scopeFor(accountId, guildId, key), key, value);
 }
 
 export function setSetting(accountId, key, value) {
